@@ -90,11 +90,22 @@ input[type=range]::-moz-range-thumb{width:30px;height:30px;border:0;border-radiu
 .seg .on{background:rgba(255,255,255,.26);color:#ffd60a;box-shadow:inset 1px 1px 1px rgba(255,255,255,.5)}
 #info{margin:14px 0 0;font-size:12.5px;line-height:1.55;opacity:.74;font-variant-numeric:tabular-nums}
 @media (prefers-reduced-motion:reduce){#v,#stage{transition:none}}
+
+/* ---------- 4D tilt parallax + depth of field ---------- */
+#app{perspective:1100px}
+#depthFx{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .35s;
+  -webkit-backdrop-filter:blur(var(--dbl,10px)) saturate(106%);backdrop-filter:blur(var(--dbl,10px)) saturate(106%);
+  -webkit-mask-image:radial-gradient(ellipse 46% 37% at 50% 46%,rgba(0,0,0,0) 0%,rgba(0,0,0,0) 44%,rgba(0,0,0,.5) 70%,#000 100%);
+  mask-image:radial-gradient(ellipse 46% 37% at 50% 46%,rgba(0,0,0,0) 0%,rgba(0,0,0,0) 44%,rgba(0,0,0,.5) 70%,#000 100%)}
+.depth #depthFx{opacity:1}
+.par .glass::after{background:linear-gradient(135deg,rgba(255,255,255,.34),transparent 38%,transparent 68%,rgba(255,255,255,.12)),radial-gradient(circle at var(--lx,50%) var(--ly,26%),rgba(255,255,255,.28),rgba(255,255,255,0) 60%)}
+#eng .sub{font-size:12.5px;opacity:.6;margin:6px 0 0;line-height:1.5}
 </style>
 </head>
 <body>
 <div id="app">
   <div id="stage"><video id="v" playsinline muted autoplay></video></div>
+  <div id="depthFx"></div>
   <div id="grid"></div><div id="mask"></div><div id="focus"></div><div id="cd"></div><div id="fx"></div>
 
   <div class="top glass">
@@ -124,6 +135,7 @@ input[type=range]::-moz-range-thumb{width:30px;height:30px;border:0;border-radiu
     <label><span>Transparency <output id="ot"></output></span><input type="range" id="rT" min="0" max="100" value="55"></label>
     <label><span>Bounce <output id="ob"></output></span><input type="range" id="rB" min="0" max="100" value="60"></label>
     <button class="g row" id="snd">Water sound <i class="sw on"></i></button>
+    <button class="g row" id="t4d">4D tilt parallax <i class="sw on"></i></button>
     <button class="g glass pill done" id="sdone">Done</button>
   </section>
 
@@ -134,6 +146,8 @@ input[type=range]::-moz-range-thumb{width:30px;height:30px;border:0;border-radiu
     <button class="g row" id="eBurst">Best-shot burst <i class="sw on"></i></button>
     <button class="g row" id="eSharp">Detail boost <i class="sw on"></i></button>
     <button class="g row" id="eAF">Tap to focus &amp; expose <i class="sw on"></i></button>
+    <button class="g row" id="eDepth">Depth effect <i class="sw on"></i></button>
+    <label><span>Depth strength <output id="od">70%</output></span><input type="range" id="rD" min="0" max="100" value="70"></label>
     <p id="info"></p>
     <button class="g glass pill done" id="edone">Done</button>
   </section>
@@ -157,10 +171,12 @@ const $=(s,e=document)=>e.querySelector(s),$$=s=>[...document.querySelectorAll(s
 const S={b:.6,snd:true,mode:'photo',tm:0,face:'environment',z:1,dz:1};
 /* capture engine: quality presets (stream request, JPEG quality, video cap + bitrate) */
 const E={q:'max',burst:true,sharp:true,af:true};
+/* 4D parallax + depth of field */
+const D={par:true,depth:true,k:.7};
 const QP={max:{w:7680,h:4320,jpg:.98,vmax:3840,vbr:28e6},high:{w:3840,h:2160,jpg:.94,vmax:1920,vbr:14e6},std:{w:1920,h:1080,jpg:.88,vmax:1280,vbr:6e6}};
 const app=$('#app'),v=$('#v'),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let stream=null,torchOK=false,torchOn=false,rec=null,chunks=[],micS=null,rtimer=null,items=[],vi=0,openS=null,prev=null,flipR=0,busy=false,pipe=null;
-if(matchMedia('(prefers-reduced-motion:reduce)').matches){S.b=.1;$('#rB').value=10}
+if(matchMedia('(prefers-reduced-motion:reduce)').matches){S.b=.1;$('#rB').value=10;D.par=false}
 
 /* ---------- spring ---------- */
 function sp(b,n=44){const z=.95-b*.78,w=15,wd=w*Math.sqrt(1-z*z),T=.55+b*.7,p=[];
@@ -232,6 +248,110 @@ $$('#qseg button').forEach(b=>b.onclick=()=>{if(b.dataset.q===E.q)return;E.q=b.d
   toast({max:'Max quality · highest sensor resolution',high:'High quality · 4K stream',std:'Standard · 1080p, faster'}[E.q]);start()});
 function bindSw(id,key){const b=$(id),w=$('.sw',b);b.onclick=()=>{E[key]=!E[key];w.classList.toggle('on',E[key])}}
 bindSw('#eBurst','burst');bindSw('#eSharp','sharp');bindSw('#eAF','af');
+
+/* ---------- 4D tilt parallax ---------- */
+const PAR={on:true,k:1,ax:0,ay:0,tx:0,ty:0,base:null,raf:0,listening:false,gyro:false};
+const PL=[['.top',18],['#zoom',13],['#modes',11],['.ctrl',9],['#stage',-7],['#toast',20],['#rb2',16]];
+let PLc=null;
+function parLayers(){if(!PLc)PLc=PL.map(([s2,d])=>[$(s2),d]);return PLc}
+function parApply(){
+  for(const [el,d] of parLayers())if(el)el.style.translate=(PAR.tx*d).toFixed(2)+'px '+(PAR.ty*d).toFixed(2)+'px';
+  document.documentElement.style.setProperty('--lx',(50+PAR.tx*44).toFixed(1)+'%');
+  document.documentElement.style.setProperty('--ly',(26+PAR.ty*34).toFixed(1)+'%');
+}
+function parReset(){for(const [el] of parLayers())if(el)el.style.translate='0px 0px';
+  document.documentElement.style.setProperty('--lx','50%');
+  document.documentElement.style.setProperty('--ly','26%')}
+function parKick(){if(!PAR.on||PAR.raf)return;PAR.raf=requestAnimationFrame(parLoop)}
+function parLoop(){
+  PAR.raf=0;
+  const tx=PAR.ax*PAR.k,ty=PAR.ay*PAR.k;
+  PAR.tx+=(tx-PAR.tx)*.14;PAR.ty+=(ty-PAR.ty)*.14;
+  parApply();
+  if(Math.abs(tx-PAR.tx)>.0015||Math.abs(ty-PAR.ty)>.0015)PAR.raf=requestAnimationFrame(parLoop);
+}
+const clampP=v=>Math.max(-1,Math.min(1,v));
+function onTilt(e){
+  if(e.beta==null&&e.gamma==null)return;
+  const b=e.beta||0,g=e.gamma||0;
+  if(!PAR.base)PAR.base={b,g};
+  const db=Math.max(-40,Math.min(40,b-PAR.base.b))/40;
+  const dg=Math.max(-40,Math.min(40,g-PAR.base.g))/40;
+  PAR.gyro=true;PAR.ax=clampP(-dg);PAR.ay=clampP(-db);parKick();
+}
+function enableTilt(){
+  if(PAR.listening)return;
+  const start=()=>{if(PAR.listening)return;PAR.listening=true;addEventListener('deviceorientation',onTilt,{passive:true})};
+  try{
+    if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
+      DeviceOrientationEvent.requestPermission().then(r=>{if(r==='granted')start()}).catch(()=>{});
+    }else if(typeof DeviceOrientationEvent!=='undefined'){start()}
+  }catch(e){}
+}
+addEventListener('pointermove',e=>{
+  if(!PAR.on||e.pointerType==='touch'&&e.buttons===0)return;
+  const r=$('#stage').getBoundingClientRect();
+  if(!r.width||!r.height)return;
+  PAR.ax=clampP((e.clientX-r.left)/r.width*2-1);
+  PAR.ay=clampP((e.clientY-r.top)/r.height*2-1);
+  parKick();
+},{passive:true});
+function applyPar(){
+  PAR.on=D.par;app.classList.toggle('par',D.par);
+  if(!D.par){PAR.ax=PAR.ay=PAR.tx=PAR.ty=0;parReset();if(PAR.raf){cancelAnimationFrame(PAR.raf);PAR.raf=0}}
+  else parKick();
+}
+
+/* ---------- depth of field ---------- */
+const dScratch=document.createElement('canvas');
+function depthMask(g,w,h){
+  const cx=w/2,cy=h*.46,r=Math.max(w,h)*.62;
+  const gr=g.createRadialGradient(cx,cy,0,cx,cy,r);
+  gr.addColorStop(0,'rgba(0,0,0,0)');
+  gr.addColorStop(.40,'rgba(0,0,0,0)');
+  gr.addColorStop(.64,'rgba(0,0,0,.45)');
+  gr.addColorStop(.92,'rgba(0,0,0,1)');
+  gr.addColorStop(1,'rgba(0,0,0,1)');
+  return gr;
+}
+function depthPass(ctx,canvas,k){
+  const w=canvas.width,h=canvas.height;
+  if(!w||!h||k<=0)return;
+  const tw=Math.max(8,Math.round(w/5)),th=Math.max(8,Math.round(h/5));
+  if(dScratch.width!==tw||dScratch.height!==th){dScratch.width=tw;dScratch.height=th}
+  const b=dScratch.getContext('2d');
+  if(!b)return;
+  b.setTransform(1,0,0,1,0,0);
+  b.globalCompositeOperation='source-over';
+  b.globalAlpha=1;
+  b.clearRect(0,0,tw,th);
+  const blur=Math.max(.5,Math.min(8,(Math.min(w,h)/5/58)*(0.65+0.85*k)));
+  try{b.filter='blur('+blur.toFixed(2)+'px)'}catch(e){}
+  b.drawImage(canvas,0,0,tw,th);
+  try{b.filter='none'}catch(e){}
+  b.globalCompositeOperation='destination-in';
+  b.fillStyle=depthMask(b,tw,th);
+  b.fillRect(0,0,tw,th);
+  b.globalCompositeOperation='source-over';
+  ctx.save();
+  ctx.imageSmoothingEnabled=true;
+  try{ctx.imageSmoothingQuality='high'}catch(e){}
+  ctx.globalAlpha=Math.max(0,Math.min(1,k));
+  ctx.drawImage(dScratch,0,0,w,h);
+  ctx.restore();
+}
+function applyDepth(){
+  D.depth=!!D.depth;
+  app.classList.toggle('depth',D.depth);
+}
+
+$('#eDepth').onclick=()=>{D.depth=!D.depth;$('#eDepth .sw').classList.toggle('on',D.depth);applyDepth();toast(D.depth?'Depth effect on — background softens':'Depth effect off')};
+$('#rD').oninput=()=>{D.k=+$('#rD').value/100;$('#od').textContent=$('#rD').value+'%';
+  document.documentElement.style.setProperty('--dbl',(3+D.k*13).toFixed(1)+'px')};
+document.documentElement.style.setProperty('--dbl',(3+D.k*13).toFixed(1)+'px');
+$('#t4d').onclick=()=>{D.par=!D.par;$('#t4d .sw').classList.toggle('on',D.par);applyPar();toast(D.par?'4D tilt on — move the phone':'4D tilt off')};
+applyDepth();applyPar();
+addEventListener('pointerdown',enableTilt,{once:true,passive:true});
 
 /* ---------- top buttons ---------- */
 $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.toggle('on');e.currentTarget.setAttribute('aria-pressed',app.classList.contains('grid'))};
@@ -405,6 +525,7 @@ async function snap(){
   if(best&&best.close)best.close();
   let boosted=false;
   if(E.sharp&&!nat&&w*h<=12e6){await sleep(0);try{sharpen(c,.4);boosted=true}catch(e){}}
+  if(D.depth){try{await sleep(0);depthPass(c.getContext('2d'),c,D.k)}catch(e){}}
   const b=await toJpg(c,QP[E.q].jpg);
   if(!b)return toast('Could not save the photo');
   add({t:'i',u:URL.createObjectURL(b),x:'jpg'});
@@ -426,7 +547,8 @@ function makePipe(){
   if(!ctx||!c.captureStream)return null;
   let cs;try{cs=c.captureStream(30)}catch(e){return null}
   let live=true,raf=0;
-  const draw=()=>{const q=cropRect();if(q)drawCrop(ctx,c,q,w,h,S.face==='user')};
+  const draw=()=>{const q=cropRect();if(!q)return;drawCrop(ctx,c,q,w,h,S.face==='user');
+    if(D.depth){try{depthPass(ctx,c,D.k)}catch(e){}}};
   draw();
   const loop=()=>{if(!live)return;draw();raf=requestAnimationFrame(loop)};
   raf=requestAnimationFrame(loop);
