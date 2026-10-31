@@ -23,7 +23,7 @@ $BT/aapt2 compile --dir apk/res -o out/res.zip 2>&1 | tail -3
 echo "== 4. link =="
 $BT/aapt2 link -o out/base.apk -I $AJ --manifest apk/AndroidManifest.xml \
   -A apk/assets --min-sdk-version 24 --target-sdk-version 34 \
-  --version-code 1 --version-name 1.0 out/res.zip 2>&1 | tail -5
+  --version-code 2 --version-name 1.1 out/res.zip 2>&1 | tail -5
 ls -lh out/base.apk
 
 echo "== 5. add dex =="
