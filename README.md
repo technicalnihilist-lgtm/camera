@@ -5,7 +5,7 @@ A camera app with a liquid-glass interface — real glass panels, spring-driven 
 <p align="center">
   <img src="screenshots/main.jpg" width="215" alt="Camera view with depth effect">
   <img src="screenshots/engine.jpg" width="215" alt="Capture engine settings">
-  <img src="screenshots/motion.jpg" width="215" alt="Glass and motion settings">
+  <img src="screenshots/settings.jpg" width="215" alt="Settings sheet">
   <img src="screenshots/viewer.jpg" width="215" alt="Photo viewer">
 </p>
 
@@ -18,7 +18,7 @@ The web version is the same app in one file: open [`index.html`](index.html) in 
 ## What it does
 
 - **Photo, Video, Square** modes, with a spring-animated mode indicator
-- **4D tilt parallax** — every glass layer sits at its own depth and drifts against the preview as you tilt the phone, with the specular highlight sweeping across the glass as it moves
+- **4D tilt parallax** — every glass layer sits at its own depth and drifts against the preview as you tilt the phone, with the specular highlight sweeping across the glass as it moves; strength is adjustable
 - **Depth effect** — background softening that applies to the live preview, the saved photo *and* the recorded video, with a strength slider
 - **1× / 2× / 3× zoom** — hardware zoom where the camera exposes it, digital zoom otherwise
 - **Best-shot burst** — takes several frames and keeps the sharpest one
@@ -36,6 +36,15 @@ The important detail: **what you see is what you get**. The preview is a centre 
 **4D parallax.** Each chrome layer — top bar, zoom pill, mode switcher, controls, toast — carries a depth value from 18 down to 9, and the preview itself carries −7 so it drifts the other way. Motion comes from `deviceorientation` (the phone's gyro, with the tilt baseline taken from the first reading so a held phone sits neutral) and falls back to pointer movement on desktop. Values are smoothed with a frame-rate-independent lerp, so it settles rather than jitters, and the render loop stops when the movement stops. On iOS the orientation permission is requested on the first tap. With `prefers-reduced-motion` the effect starts off.
 
 **Depth of field.** A capture is composited against a blurred copy of itself: the frame is downscaled to a fifth, blurred, masked with a feathered radial gradient that keeps the middle sharp and fades to full blur at the edges, then drawn back over the original. The preview shows the same falloff live through a masked `backdrop-filter`, so you see the look before you shoot. Video runs the same pass inside the recording canvas, which is why the saved clip matches the preview.
+
+## Settings
+
+Everything that shapes the look and the two effects lives in one sheet, behind the sliders button in the top bar:
+
+- **Glass & motion** — transparency, bounce, water sound
+- **4D & depth** — 4D tilt parallax on/off, **parallax strength** (0 – 1.7×), depth effect on/off, **depth strength** (0 – 100%)
+
+Values are saved on the device and restored on the next launch, so the app opens the way you left it.
 
 It is a **centre-weighted** depth effect, not subject detection — there is no ML segmentation in this build, so a subject that is not near the middle will get softened along with the background. Turn it off, or drop the strength, when that matters.
 
