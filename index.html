@@ -422,12 +422,22 @@ async function start(){
   const id=++startId;
   const old=stream;stream=null;torchOK=false;torchOn=false;
   $('#bF').classList.remove('on');$('#bF').setAttribute('aria-pressed','false');
-  if(old)old.getTracks().forEach(t=>t.stop());
-  if(!hasGum()){const s=secInfo();return gate(s.msg,s.label,s.action)}
-  try{const P=QP[E.q];const s=await gum({video:{facingMode:{ideal:S.face},width:{ideal:P.w},height:{ideal:P.h},frameRate:{ideal:30}},audio:false});
-    if(id!==startId){s.getTracks().forEach(t=>t.stop());return}
+  /* Flipping the camera or switching quality used to stop the live stream *before*
+     asking for the new one, so a refused or failed switch left a black, dead
+     preview behind the gate. Ask for the new stream first and release the old
+     tracks only once the new one is attached; if the device refuses because the
+     old stream still holds the sensor, release it and retry once, so a switch can
+     never fail for that reason alone. Every exit path still releases the old
+     tracks, so no camera is left open. */
+  const releaseOld=()=>{if(old&&old.getTracks)try{old.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}};
+  if(!hasGum()){releaseOld();const s=secInfo();return gate(s.msg,s.label,s.action)}
+  const ask=()=>{const P=QP[E.q];return gum({video:{facingMode:{ideal:S.face},width:{ideal:P.w},height:{ideal:P.h},frameRate:{ideal:30}},audio:false})};
+  try{let s;
+    try{s=await ask()}catch(e){const n=e&&e.name;
+      if(old&&(n==='NotReadableError'||n==='AbortError'||n==='TrackStartError')){releaseOld();s=await ask()}else throw e}
+    if(id!==startId){s.getTracks().forEach(t=>t.stop());releaseOld();return}
     stream=s;
-    v.srcObject=s;await v.play().catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
+    v.srcObject=s;releaseOld();await v.play().catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
     const t=s.getVideoTracks()[0];
     if(t)t.onended=()=>{if(stream!==s)return;v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
     const c=(t&&t.getCapabilities&&t.getCapabilities())||{};torchOK=!!c.torch;torchOn=false;
@@ -436,7 +446,7 @@ async function start(){
     $('#bF').classList.remove('on');$('#bF').setAttribute('aria-pressed','false');$('#bF').classList.toggle('off',!torchOK);
     $('#gb').textContent='Allow camera';
     applyZoom();tune(s,c)}
-  catch(e){if(id!==startId)return;const n=e&&e.name||'Error';
+  catch(e){releaseOld();if(id!==startId)return;const n=e&&e.name||'Error';
     if(n==='SecurityError'||n==='NotSupportedError'){const s=secInfo();return gate(s.msg,s.label,s.action)}
     if(n==='NotAllowedError'&&!isFramed())return gate('Camera permission was denied. Tap the lock or camera icon in the address bar, allow Camera, then tap the button below.');
     if(n==='NotAllowedError'&&isFramed()&&openable())return gate('Camera permission was refused inside this preview frame. Open the app in its own tab with the button below, then allow the camera.',  'Open in a new tab','open');
