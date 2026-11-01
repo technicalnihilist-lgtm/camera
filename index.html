@@ -531,10 +531,19 @@ function sharpScore(src,sx,sy,sw,sh){const w=320,h=Math.max(8,Math.round(w*sh/sw
     let s=0,s2=0,n=0;
     for(let j=1;j<h-1;j++)for(let i=1;i<w-1;i++){const k=j*w+i,l=4*g[k]-g[k-1]-g[k+1]-g[k-w]-g[k+w];s+=l;s2+=l*l;n++}
     return s2/n-(s/n)*(s/n)}catch(e){return 0}}
-function sharpen(c,k){const w=c.width,h=c.height,x=c.getContext('2d'),im=x.getImageData(0,0,w,h),s=im.data,o=new Uint8ClampedArray(s.length),cn=1+4*k,st=w*4;
+/* Detail boost is the one capture stage that touches every pixel of the full
+   frame (~12 MP), so it used to freeze the main thread for a few hundred ms
+   right as the shutter animation and the toast were running. Each output pixel
+   reads only the untouched source buffer, so the work splits into row bands
+   that yield between them: same bytes out, no dropped frames. */
+const SHARP_BAND_PX=1.5e6;
+async function sharpen(c,k){const w=c.width,h=c.height,x=c.getContext('2d'),im=x.getImageData(0,0,w,h),s=im.data,o=new Uint8ClampedArray(s.length),cn=1+4*k,st=w*4;
   o.set(s);
-  for(let j=1;j<h-1;j++){let p=(j*w+1)*4;for(let i=1;i<w-1;i++,p+=4){
-    for(let q=p;q<p+3;q++)o[q]=cn*s[q]-k*(s[q-4]+s[q+4]+s[q-st]+s[q+st])}}
+  const band=Math.max(64,Math.ceil(SHARP_BAND_PX/Math.max(1,w)));
+  for(let j0=1;j0<h-1;j0+=band){const j1=Math.min(h-1,j0+band);
+    for(let j=j0;j<j1;j++){let p=(j*w+1)*4;for(let i=1;i<w-1;i++,p+=4){
+      for(let q=p;q<p+3;q++)o[q]=cn*s[q]-k*(s[q-4]+s[q+4]+s[q-st]+s[q+st])}}
+    if(j1<h-1)await sleep(0)}
   im.data.set(o);x.putImageData(im,0,0)}
 const nextFrame=()=>new Promise(r=>v.requestVideoFrameCallback?v.requestVideoFrameCallback(()=>r()):setTimeout(r,40));
 async function snap(){
@@ -560,7 +569,7 @@ async function snap(){
   drawSrc(c.getContext('2d'),src,r,w,h,S.face==='user');
   if(best&&best.close)best.close();
   let boosted=false;
-  if(E.sharp&&!nat&&w*h<=12e6){await sleep(0);try{sharpen(c,.4);boosted=true}catch(e){}}
+  if(E.sharp&&!nat&&w*h<=12e6){await sleep(0);try{await sharpen(c,.4);boosted=true}catch(e){}}
   if(D.depth){try{await sleep(0);depthPass(c.getContext('2d'),c,D.k)}catch(e){}}
   const b=await toJpg(c,QP[E.q].jpg);
   if(!b)return toast('Could not save the photo');

@@ -4,7 +4,6 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 ## Open
 
-- [ ] Capture blocks the main thread: burst frames, sharpness scoring, sharpen and the depth pass all run synchronously. Yield (`await sleep(0)`) between stages so the shutter animation and toast stay smooth on slow phones.
 - [ ] `makePipe()` draws at rAF speed (up to 60 fps) while the recorder needs 30 — throttle the canvas loop to the target frame rate to halve draw cost and battery use.
 - [ ] `spr()` rebuilds a 45-step keyframe array on every call. Cache the sampled curve per bounce value.
 - [ ] `start()` stops the old stream *before* acquiring the new one; a failed switch leaves a dead preview. Acquire first, then stop the old tracks.
@@ -24,5 +23,6 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [ ] Check every `getAnimations()` call is guarded for browsers without WAAPI (old WebView).
 
 ## Done
+- [x] Capture blocks the main thread: burst frames, sharpness scoring, sharpen and the depth pass all run synchronously. Burst frames already awaited a frame callback and the depth pass works on a fifth-size scratch surface, but `sharpen()` walked every pixel of the full frame in one go. It now processes row bands of ~1.5 M px and yields between them, so the shutter animation and toast keep painting on slow phones. *(done 2026-11-01)*
 - [x] `sharpScore()` allocated a fresh 320 px canvas and grey buffer for every burst candidate (~3 MB of RGBA each). One scratch surface and one `Float32Array` are now reused across frames. *(done 2026-11-01)*
 - [x] Blob object URLs from `URL.createObjectURL` are never revoked. Revoke on drop and cap `items` (~30) so a long session cannot exhaust memory. *(done 2026-11-01)*
