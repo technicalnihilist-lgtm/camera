@@ -6,7 +6,6 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 - [ ] Capture blocks the main thread: burst frames, sharpness scoring, sharpen and the depth pass all run synchronously. Yield (`await sleep(0)`) between stages so the shutter animation and toast stay smooth on slow phones.
 - [ ] `sharpScore()` draws each candidate at 320 px wide — for a 5-frame burst that is five full-size downscales per shot. Score a fixed centre crop instead, or reuse one canvas.
-- [ ] Blob object URLs from `URL.createObjectURL` are never revoked. Revoke on drop and cap `items` (~30) so a long session cannot exhaust memory.
 - [ ] `makePipe()` draws at rAF speed (up to 60 fps) while the recorder needs 30 — throttle the canvas loop to the target frame rate to halve draw cost and battery use.
 - [ ] `spr()` rebuilds a 45-step keyframe array on every call. Cache the sampled curve per bounce value.
 - [ ] `start()` stops the old stream *before* acquiring the new one; a failed switch leaves a dead preview. Acquire first, then stop the old tracks.
@@ -26,4 +25,4 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [ ] Check every `getAnimations()` call is guarded for browsers without WAAPI (old WebView).
 
 ## Done
-
+- [x] Blob object URLs from `URL.createObjectURL` are never revoked. Revoke on drop and cap `items` (~30) so a long session cannot exhaust memory. *(done 2026-11-01)*

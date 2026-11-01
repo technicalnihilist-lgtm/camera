@@ -495,7 +495,16 @@ function drawSrc(ctx,src,r,w,h,mirror){ctx.save();if(mirror){ctx.translate(w,0);
 function drawCrop(ctx,c,r,w,h,mirror){drawSrc(ctx,v,r,w,h,mirror)}
 
 /* ---------- capture ---------- */
-function add(it){items.push(it);renderThumb();spr($('#thumb'),{s:.5},{s:1})}
+/* items are blob: object URLs (photo JPEGs, recorded videos, native picks).
+   Nothing ever revoked them, so a long session grew without bound until the
+   WebView ran out of memory. Keep the last MAX_ITEMS and release the rest. */
+const MAX_ITEMS=30;
+function release(it){if(it&&typeof it.u==='string'&&it.u.lastIndexOf('blob:',0)===0){try{URL.revokeObjectURL(it.u)}catch(e){}}}
+function add(it){items.push(it);
+  /* never evict while the viewer is showing the list (the open <video> would
+     lose its source); the shutter is unreachable then anyway */
+  while(items.length>MAX_ITEMS&&openS!==$('#view')){release(items.shift());if(vi>0)vi--}
+  renderThumb();spr($('#thumb'),{s:.5},{s:1})}
 function renderThumb(){const it=items[items.length-1];
   $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
 const toJpg=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
