@@ -68,19 +68,27 @@ Permissions requested at runtime: **Camera** (always), **Microphone** (only when
 
 ## Build it yourself
 
-You need a JDK and Android SDK build-tools 34 + platform 34. No Gradle required.
+No Gradle. You need bash, curl and unzip; the script fetches the rest.
 
 ```bash
-# layout expected by build.sh
-#   jdk/                 portable JDK 17
-#   sdk/android-14/      build-tools 34.0.0
-#   sdk/android-34/android.jar
-#   apk/src, apk/res, apk/assets/index.html, apk/AndroidManifest.xml
-
-bash app/build.sh     # → out/liquid-glass-camera.apk
+bash app/setup-toolchain.sh   # portable JDK 17 + build-tools 34 + platform 34
+bash app/build.sh             # → out/liquid-glass-camera.apk
+node tests/regress.js         # headless check of the shipped behaviour
 ```
 
-The output is signed with the debug-style key in the script; swap in your own keystore before publishing anywhere real.
+Repository layout:
+
+```
+index.html                                  the app (inlined as assets/index.html)
+app/AndroidManifest.xml                     permissions, versionCode/versionName
+app/src/app/liquidglass/camera/MainActivity.java
+app/res/mipmap-xxhdpi/ic_launcher.png
+app/keystore.jks                            dev signing key, password "android"
+app/build.sh · app/setup-toolchain.sh
+tests/regress.js                            puppeteer checklist
+```
+
+The keystore is committed on purpose: it keeps the signature stable across builds so an updated APK installs over the previous one. It is a throwaway self-signed key — generate your own before publishing anywhere real.
 
 ## Notes
 
