@@ -514,9 +514,19 @@ async function stillBitmap(){
     if(pc&&pc.imageWidth&&pc.imageHeight){o.imageWidth=pc.imageWidth.max;o.imageHeight=pc.imageHeight.max}
     const blob=await ic.takePhoto(o);return await createImageBitmap(blob)}
   catch(e){return null}}
-function sharpScore(src,sx,sy,sw,sh){const w=320,h=Math.max(8,Math.round(w*sh/sw)),c=document.createElement('canvas');c.width=w;c.height=h;
-  const x=c.getContext('2d',{willReadFrequently:true});
-  try{x.drawImage(src,sx,sy,sw,sh,0,0,w,h);const d=x.getImageData(0,0,w,h).data,g=new Float32Array(w*h);
+/* one scratch surface and one grey buffer, reused for every candidate frame:
+   a 5-frame burst used to allocate five 320-px canvases (~3 MB of RGBA each)
+   plus five Float32Arrays per shot, right while the shutter animation runs. */
+const sScratch=document.createElement('canvas');
+let sCtx=null,sGray=null;
+function sharpScore(src,sx,sy,sw,sh){const w=320,h=Math.max(8,Math.round(w*sh/sw));
+  if(sScratch.width!==w||sScratch.height!==h){sScratch.width=w;sScratch.height=h;sCtx=null;sGray=null}
+  if(!sCtx)sCtx=sScratch.getContext('2d',{willReadFrequently:true});
+  if(!sCtx)return 0;
+  try{const x=sCtx;x.clearRect(0,0,w,h);x.drawImage(src,sx,sy,sw,sh,0,0,w,h);
+    const d=x.getImageData(0,0,w,h).data;
+    if(!sGray||sGray.length!==w*h)sGray=new Float32Array(w*h);
+    const g=sGray;
     for(let i=0;i<w*h;i++)g[i]=d[i*4]*.299+d[i*4+1]*.587+d[i*4+2]*.114;
     let s=0,s2=0,n=0;
     for(let j=1;j<h-1;j++)for(let i=1;i<w-1;i++){const k=j*w+i,l=4*g[k]-g[k-1]-g[k+1]-g[k-w]-g[k+w];s+=l;s2+=l*l;n++}
