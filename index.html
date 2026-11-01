@@ -601,11 +601,14 @@ function makePipe(){
   c.width=w;c.height=h;const ctx=c.getContext('2d',{alpha:false});
   if(!ctx||!c.captureStream)return null;
   let cs;try{cs=c.captureStream(30)}catch(e){return null}
-  let live=true,raf=0;
+  let live=true,raf=0,last=performance.now();
   const draw=()=>{const q=cropRect();if(!q)return;drawCrop(ctx,c,q,w,h,S.face==='user');
     if(D.depth){try{depthPass(ctx,c,D.k)}catch(e){}}};
   draw();
-  const loop=()=>{if(!live)return;draw();raf=requestAnimationFrame(loop)};
+  /* the capture stream asks for 30 fps, so drawing faster than that only burns
+     GPU/battery: skip frames that arrive before the next 1/30 s slot is due */
+  const STEP=1000/30-1;
+  const loop=t=>{if(!live)return;if(t-last>=STEP){last=t;draw()}raf=requestAnimationFrame(loop)};
   raf=requestAnimationFrame(loop);
   return{stream:cs,poster:()=>{try{return c.toDataURL('image/jpeg',.72)}catch(e){return''}},
     stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop())}}}
