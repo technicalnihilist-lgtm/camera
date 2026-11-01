@@ -593,6 +593,29 @@ async function countdown(){const cd=$('#cd');counting=true;cdCancel=false;
 function cancelCd(){if(counting){cdCancel=true;toast('Timer cancelled')}}
 
 /* ---------- video pipeline: crop + zoom baked into the recording ---------- */
+/* The poster is only a placeholder shown until the video's first frame decodes,
+   and it is drawn at thumbnail size and on a phone screen. It used to be
+   encoded straight off the recording canvas (up to 3840×2160), so tapping stop
+   forced a synchronous GPU readback plus a full-size JPEG encode of ~8 Mpx on
+   the main thread, and kept a base64 string of hundreds of KB alive for every
+   recorded clip. Downscale into one reused scratch surface first (long edge
+   1080): the same picture on screen, ~4× less readback and encode work, and a
+   far smaller string per clip. */
+const pScratch=document.createElement('canvas');
+function posterFrom(c){
+  try{
+    const s=Math.min(1,1080/Math.max(c.width,c.height));
+    const w=Math.max(2,Math.round(c.width*s)),h=Math.max(2,Math.round(c.height*s));
+    if(pScratch.width!==w||pScratch.height!==h){pScratch.width=w;pScratch.height=h}
+    const x=pScratch.getContext('2d');
+    if(!x)return'';
+    x.setTransform(1,0,0,1,0,0);x.globalAlpha=1;x.globalCompositeOperation='source-over';
+    x.imageSmoothingEnabled=true;
+    try{x.imageSmoothingQuality='high'}catch(e){}
+    x.drawImage(c,0,0,w,h);
+    return pScratch.toDataURL('image/jpeg',.72);
+  }catch(e){return''}
+}
 function makePipe(){
   const r=cropRect();if(!r)return null;
   const scale=Math.min(1,QP[E.q].vmax/Math.max(r.sw,r.sh));
@@ -610,7 +633,7 @@ function makePipe(){
   const STEP=1000/30-1;
   const loop=t=>{if(!live)return;if(t-last>=STEP){last=t;draw()}raf=requestAnimationFrame(loop)};
   raf=requestAnimationFrame(loop);
-  return{stream:cs,poster:()=>{try{return c.toDataURL('image/jpeg',.72)}catch(e){return''}},
+  return{stream:cs,poster:()=>posterFrom(c),
     stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop())}}}
 
 function cleanupRec(){clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
