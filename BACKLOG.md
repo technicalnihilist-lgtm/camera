@@ -4,7 +4,7 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 ## Open
 
-- [ ] No `visibilitychange` handling: the parallax rAF and the recording canvas loop keep running when the page is hidden. Pause both.
+- [ ] No `visibilitychange` handling: the parallax rAF and the recording canvas loop keep running when the page is hidden. Pause both. *(checked 2026-11-02: rAF callbacks are already not serviced for a hidden document, and both loops are driven only by rAF — re-check on a real Android WebView before spending a run on this)*
 - [ ] Viewer: drop the poster data URI once the video has loaded (the pause/release half is done).
 - [ ] Native save base64-encodes 3 MB chunks on the JS thread. Smaller chunks plus a yield keeps big video saves responsive.
 - [ ] `countdown()` can leave a pending `sleep` after cancel — make sure no capture fires after the timer is cancelled.

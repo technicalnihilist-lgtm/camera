@@ -697,9 +697,17 @@ function makePipe(){
    is restarted. Finish the take from the chunks we already have, exactly once,
    whether the event arrives or a watchdog gets there first. */
 let recWatch=0;
+/* `chunks` is reassigned only when the *next* take starts, so the part-Blobs of
+   the take that just finished stayed referenced for the rest of the session —
+   the finished clip's Blob holds its own reference to that data, so dropping the
+   array frees nothing that is still needed, while keeping it pinned every byte
+   MediaRecorder handed us (~210 MB for a 60 s take at the Max-quality 28 Mbps
+   bitrate) even after the clip has been evicted from `items` and its object URL
+   revoked. Release them as soon as the take is finalised or abandoned. */
 function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
   if(pipe){pipe.stop();pipe=null}
   if(micS){micS.getTracks().forEach(t=>t.stop());micS=null}
+  chunks.length=0;
   rec=null}
 function finishRec(rr){if(rec!==rr)return;
   const type=(rr.mimeType||'video/webm').split(';')[0];
