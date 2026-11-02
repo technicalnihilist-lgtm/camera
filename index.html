@@ -646,13 +646,32 @@ function makePipe(){
   return{stream:cs,poster:()=>posterFrom(c),
     stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop())}}}
 
-function cleanupRec(){clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
+/* MediaRecorder.stop() marks the recorder inactive and posts a stop task, but
+   nothing guarantees that task runs: a wedged media pipeline in a WebView can
+   swallow the event, leaving `rec` non-null for good. The shutter then thinks a
+   take is still running — the UI stays in the recording state, the capture pipe
+   keeps drawing its canvas every frame and the mic stays open — until the app
+   is restarted. Finish the take from the chunks we already have, exactly once,
+   whether the event arrives or a watchdog gets there first. */
+let recWatch=0;
+function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
   if(pipe){pipe.stop();pipe=null}
   if(micS){micS.getTracks().forEach(t=>t.stop());micS=null}
   rec=null}
+function finishRec(rr){if(rec!==rr)return;
+  const type=(rr.mimeType||'video/webm').split(';')[0];
+  const poster=pipe?pipe.poster():'';
+  const ok=chunks.length&&chunks.some(c=>c.size);
+  const blob=ok?new Blob(chunks,{type:type}):null;
+  cleanupRec();
+  if(!blob)return toast('Nothing was recorded');
+  add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:poster})}
+function stopRec(){const rr=rec;if(!rr)return;
+  recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
+  try{rr.stop()}catch(e){finishRec(rr)}}
 
 async function toggleRec(){
-  if(rec){try{rec.stop()}catch(e){cleanupRec()}return}
+  if(rec){stopRec();return}
   if(busy)return cancelCd();
   if(!stream||!v.videoWidth)return toast('Camera is not ready yet');
   if(!window.MediaRecorder)return toast('Video recording is not supported here');
@@ -674,13 +693,7 @@ async function toggleRec(){
     rec=rr;
     rr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
     rr.onerror=()=>{toast('Recording stopped unexpectedly');cleanupRec()};
-    rr.onstop=()=>{const type=(rr.mimeType||'video/webm').split(';')[0];
-      const poster=pipe?pipe.poster():'';
-      const ok=chunks.length&&chunks.some(c=>c.size);
-      const blob=ok?new Blob(chunks,{type:type}):null;
-      cleanupRec();
-      if(!blob)return toast('Nothing was recorded');
-      add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:poster})};
+    rr.onstop=()=>finishRec(rr);
     rr.start(250);
     app.classList.add('rec');
     const t0=Date.now();$('#rt').textContent='00:00';

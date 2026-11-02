@@ -10,7 +10,6 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [ ] Native save base64-encodes 3 MB chunks on the JS thread. Smaller chunks plus a yield keeps big video saves responsive.
 - [ ] `countdown()` can leave a pending `sleep` after cancel — make sure no capture fires after the timer is cancelled.
 - [ ] `applyZoom()` re-reads `getCapabilities()` on every call. Cache per track.
-- [ ] `MediaRecorder` stop race can leave `rec` non-null if `onstop` never fires. Add a watchdog timer.
 - [ ] `renderThumb()` rewrites the whole thumb `innerHTML` each capture; swap only the changed child.
 - [ ] Depth pass clears and re-configures the scratch canvas every frame; keep the surface warm and skip entirely when strength is 0.
 - [ ] Add `tests/regress.js` to CI-style runs so every change is checked the same way (no console errors, capture size, video, settings, 4D, depth).
@@ -21,6 +20,7 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [ ] Check every `getAnimations()` call is guarded for browsers without WAAPI (old WebView).
 
 ## Done
+- [x] `MediaRecorder.stop()` only marks the recorder inactive and posts the stop task, so a WebView that swallows the event left `rec` non-null for the rest of the session: the shutter believed a take was still running, `#app` kept its `rec` state, the capture pipe's canvas loop kept drawing every frame and the mic stayed open. Finalising is now a single idempotent `finishRec(rr)` reached from `onstop`, from a throwing `stop()`, or from a 2 s watchdog armed in `stopRec()` — whichever lands first, and only once. *(done 2026-11-02)*
 - [x] The stage box was measured with `getBoundingClientRect()` on every pointermove (parallax) and on every drawn recording frame (`cropRect()` → `viewAspect()`), and both reads landed right after the parallax loop had written `style.translate` — so each one forced a full synchronous layout, ~120 flushes a second while a finger drags a settings slider and ~30 a second while recording. `#stage` is `inset:0` in a fixed-size `#app`, so its box is now measured once into `stageBox()` and reused; `resize` drops the cache. Framing maths and the recorded crop are unchanged. *(done 2026-11-02)*
 - [x] The poster for a recorded clip was encoded straight off the recording canvas (up to 3840×2160): tapping stop forced a synchronous readback + JPEG encode of ~8 Mpx on the main thread (575 ms measured at 4K) and kept a 236 KB base64 string alive for every clip. It is now downscaled into one reused scratch surface (long edge 1080) before encoding — 221 ms and 55 KB, same picture at thumb and phone size. *(done 2026-11-01)*
 - [x] `makePipe()` drew at rAF speed (up to 60 fps) while the recorder only asks `captureStream()` for 30 — the canvas loop now skips any frame that arrives before the next 1/30 s slot is due, so crop + depth work is done at most 30 times a second instead of 60. *(done 2026-11-01)*
