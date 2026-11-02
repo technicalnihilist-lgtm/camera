@@ -4,7 +4,7 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 ## Open
 
-- [ ] `spr()` rebuilds a 45-step keyframe array on every call. Cache the sampled curve per bounce value.
+- [ ] `spr()` is now cheap to build, but `el.animate()` with 45 keyframes still costs ~1.4 ms in keyframe/style resolution on every bounce (~45 µs per keyframe, measured). Sample the curve adaptively (drop keyframes whose linear-interpolation error is sub-pixel) to halve that without moving the rendered curve.
 - [ ] No `visibilitychange` handling: the parallax rAF and the recording canvas loop keep running when the page is hidden. Pause both.
 - [ ] Viewer: drop the poster data URI once the video has loaded (the pause/release half is done).
 - [ ] Native save base64-encodes 3 MB chunks on the JS thread. Smaller chunks plus a yield keeps big video saves responsive.
@@ -20,6 +20,7 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [ ] Check every `getAnimations()` call is guarded for browsers without WAAPI (old WebView).
 
 ## Done
+- [x] `spr()` rebuilt the 45-point spring curve (45 exp/cos/sin) and a fresh array of 45 keyframe objects with two template strings each on every call — ~0.38 ms of main-thread work and ~90 string allocations per bounce, on the tap that was supposed to start the animation, for endpoint pairs the app replays constantly (every control tap, every toast, every capture). The curve is now sampled once per bounce value and each keyframe set is built once and shared with `el.animate()` (which copies it); the cache is dropped when the bounce slider changes. Keyframes are byte-identical, verified against the old generator across 272 parameter/bounce combinations. *(done 2026-11-02)*
 - [x] `MediaRecorder.stop()` only marks the recorder inactive and posts the stop task, so a WebView that swallows the event left `rec` non-null for the rest of the session: the shutter believed a take was still running, `#app` kept its `rec` state, the capture pipe's canvas loop kept drawing every frame and the mic stayed open. Finalising is now a single idempotent `finishRec(rr)` reached from `onstop`, from a throwing `stop()`, or from a 2 s watchdog armed in `stopRec()` — whichever lands first, and only once. *(done 2026-11-02)*
 - [x] The stage box was measured with `getBoundingClientRect()` on every pointermove (parallax) and on every drawn recording frame (`cropRect()` → `viewAspect()`), and both reads landed right after the parallax loop had written `style.translate` — so each one forced a full synchronous layout, ~120 flushes a second while a finger drags a settings slider and ~30 a second while recording. `#stage` is `inset:0` in a fixed-size `#app`, so its box is now measured once into `stageBox()` and reused; `resize` drops the cache. Framing maths and the recorded crop are unchanged. *(done 2026-11-02)*
 - [x] The poster for a recorded clip was encoded straight off the recording canvas (up to 3840×2160): tapping stop forced a synchronous readback + JPEG encode of ~8 Mpx on the main thread (575 ms measured at 4K) and kept a 236 KB base64 string alive for every clip. It is now downscaled into one reused scratch surface (long edge 1080) before encoding — 221 ms and 55 KB, same picture at thumb and phone size. *(done 2026-11-01)*
