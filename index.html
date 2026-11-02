@@ -199,12 +199,36 @@ function sp(b,n=44){const z=.95-b*.78,w=15,wd=w*Math.sqrt(1-z*z),T=.55+b*.7,p=[]
 let spB=NaN,spR=null;
 const kfCache=new Map();
 function spC(){if(S.b!==spB){spB=S.b;spR=sp(S.b);kfCache.clear()}return spR}
+/* 45 evenly spaced samples are far more than a smooth spring needs. The browser
+   resolves every one of them — parse the transform, set up the interpolation —
+   at ~45 µs each, so a bounce spends ~1.4 ms on keyframes that a handful of
+   straight segments could draw identically. Drop the interior samples whose
+   removal keeps every discarded point within 0.35 px (and 0.01 opacity) of the
+   line the browser would draw between the survivors: the piecewise-linear curve
+   the compositor walks is unchanged to well under half a pixel, and no surviving
+   keyframe moves in time because offsets are written out explicitly (i/n, which
+   is exactly the implicit even spacing the array had before). */
+const KF_TOL=.35,KF_REF=800,KF_OP=.01;
+function pruneKf(a,b,k,p){
+  const n=p.length-1,c=x=>Math.min(1,Math.max(0,x));
+  const ao=a.o??1,bo=b.o??1;
+  const dY=Math.abs((b.y||0)-(a.y||0)),dS=Math.abs(b.s-a.s)*KF_REF;
+  const oAt=i=>ao+(bo-ao)*c(i/n*k);
+  const ok=(i0,i1,m)=>{const u=(m-i0)/(i1-i0);
+    const dx=Math.abs(p[m]-(p[i0]+(p[i1]-p[i0])*u));
+    return dx*dY<=KF_TOL&&dx*dS<=KF_TOL&&Math.abs(oAt(m)-(oAt(i0)+(oAt(i1)-oAt(i0))*u))<=KF_OP};
+  const keep=[0];let i0=0;
+  while(i0<n){let j=i0+1;
+    while(j<n){let good=true;for(let m=i0+1;m<=j;m++)if(!ok(i0,j+1,m)){good=false;break}
+      if(!good)break;j++}
+    keep.push(j);i0=j}
+  return keep}
 function kfFor(a,b,k){const p=spC().p;/* also drops the cache when the bounce value changed */
   const key=a.s+'|'+(a.y||0)+'|'+(a.o??1)+'|'+b.s+'|'+(b.y||0)+'|'+(b.o??1)+'|'+k;
   const hit=kfCache.get(key);if(hit)return hit;
   const n=p.length-1,c=x=>Math.min(1,Math.max(0,x));
-  const kf=p.map((x,i)=>{const s=a.s+(b.s-a.s)*x,y=(a.y||0)+((b.y||0)-(a.y||0))*x,oo=(a.o??1)+((b.o??1)-(a.o??1))*c(i/n*k);
-    return{transform:`translateY(${y}px) scale(${s})`,opacity:oo}});
+  const kf=pruneKf(a,b,k,p).map(i=>{const x=p[i],s=a.s+(b.s-a.s)*x,y=(a.y||0)+((b.y||0)-(a.y||0))*x,oo=(a.o??1)+((b.o??1)-(a.o??1))*c(i/n*k);
+    return{offset:i/n,transform:`translateY(${y}px) scale(${s})`,opacity:oo}});
   if(kfCache.size>24)kfCache.clear();
   kfCache.set(key,kf);return kf}
 const sprAnims=new WeakMap();

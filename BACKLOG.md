@@ -4,7 +4,6 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 ## Open
 
-- [ ] `spr()` is now cheap to build, but `el.animate()` with 45 keyframes still costs ~1.4 ms in keyframe/style resolution on every bounce (~45 µs per keyframe, measured). Sample the curve adaptively (drop keyframes whose linear-interpolation error is sub-pixel) to halve that without moving the rendered curve.
 - [ ] No `visibilitychange` handling: the parallax rAF and the recording canvas loop keep running when the page is hidden. Pause both.
 - [ ] Viewer: drop the poster data URI once the video has loaded (the pause/release half is done).
 - [ ] Native save base64-encodes 3 MB chunks on the JS thread. Smaller chunks plus a yield keeps big video saves responsive.
