@@ -304,7 +304,7 @@ function enableTilt(){
 }
 addEventListener('pointermove',e=>{
   if(!PAR.on||e.pointerType==='touch'&&e.buttons===0)return;
-  const r=$('#stage').getBoundingClientRect();
+  const r=stageBox();
   if(!r.width||!r.height)return;
   PAR.ax=clampP((e.clientX-r.left)/r.width*2-1);
   PAR.ay=clampP((e.clientY-r.top)/r.height*2-1);
@@ -465,7 +465,7 @@ function report(){const t=track();if(!t||!t.getSettings)return;const st=t.getSet
   $('#info').innerHTML=rows.join('<br>')}
 let afT=0;
 async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
-  const c=(t.getCapabilities&&t.getCapabilities())||{},sr=$('#stage').getBoundingClientRect();
+  const c=(t.getCapabilities&&t.getCapabilities())||{},sr=stageBox();
   let fx=(e.clientX-sr.left)/sr.width;const fy=(e.clientY-sr.top)/sr.height;if(S.face==='user')fx=1-fx;
   const x=Math.min(1,Math.max(0,(r.sx+fx*r.sw)/r.W)),y=Math.min(1,Math.max(0,(r.sy+fy*r.sh)/r.H)),adv={};
   if(c.pointsOfInterest)adv.pointsOfInterest=[{x,y}];
@@ -491,7 +491,17 @@ $('#stage').addEventListener('pointerdown',e=>{if(e.target.closest('.g'))return;
   spr(f,{s:1.7,o:0},{s:1,o:1});f.animate([{opacity:1},{opacity:1,offset:.7},{opacity:0}],{duration:1400})});
 
 /* ---------- framing: what the preview shows is what gets captured ---------- */
-function viewAspect(){const r=$('#stage').getBoundingClientRect();let a=r.width/r.height;
+/* #stage is inset:0 inside a fixed-size #app, so its box only changes when the
+   viewport does — yet it was measured with getBoundingClientRect() on every
+   pointermove (parallax) and on every drawn recording frame (cropRect →
+   viewAspect). Both reads land right after the parallax loop wrote
+   style.translate, so each one forced a full synchronous layout: ~120 flushes
+   a second while a finger drags a settings slider, ~30 a second while
+   recording. Measure once and reuse; resize drops the cache. */
+let stageRectCache=null;
+function stageBox(){if(!stageRectCache){const r=$('#stage').getBoundingClientRect();
+  stageRectCache={left:r.left,top:r.top,width:r.width,height:r.height}}return stageRectCache}
+function viewAspect(){const r=stageBox();let a=r.width/r.height;
   if(!a||!isFinite(a))a=9/16;if(S.mode==='square')a=1;return a}
 function cropRect(){return cropFor(v.videoWidth,v.videoHeight)}
 function cropFor(W,H){if(!W||!H)return null;
@@ -704,7 +714,7 @@ function intro(){const st=$('#stage');spr(st,{s:.6,o:0},{s:1,o:1},{k:3});request
   [['.top',-40,120],['#zoom',60,230],['#modes',70,320],['#thumb',80,400],['#shut',90,460],['#flip',80,520]]
    .forEach(([s,y,d])=>spr($(s),{s:.55,y,o:0},{s:1,y:0,o:1},{d}))}
 moveInd(true);intro();start();
-addEventListener('resize',()=>moveInd(true));
+addEventListener('resize',()=>{stageRectCache=null;moveInd(true)});
 if(document.fonts&&document.fonts.ready)document.fonts.ready.then(()=>moveInd(true)).catch(()=>{});
 addEventListener('keydown',e=>{if(e.key==='Escape'&&openS)hideSheet()});
 
