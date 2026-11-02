@@ -6,7 +6,7 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 
 - [ ] `spr()` rebuilds a 45-step keyframe array on every call. Cache the sampled curve per bounce value.
 - [ ] No `visibilitychange` handling: the parallax rAF and the recording canvas loop keep running when the page is hidden. Pause both.
-- [ ] Viewer: pause the outgoing `<video>` before `innerHTML` is replaced, and drop the poster data URI once the video has loaded.
+- [ ] Viewer: drop the poster data URI once the video has loaded (the pause/release half is done).
 - [ ] Native save base64-encodes 3 MB chunks on the JS thread. Smaller chunks plus a yield keeps big video saves responsive.
 - [ ] `countdown()` can leave a pending `sleep` after cancel — make sure no capture fires after the timer is cancelled.
 - [ ] `applyZoom()` re-reads `getCapabilities()` on every call. Cache per track.
@@ -28,3 +28,4 @@ Rules for every scheduled run: **no UI, layout, colour, spacing, label or intera
 - [x] Capture blocks the main thread: burst frames, sharpness scoring, sharpen and the depth pass all run synchronously. Burst frames already awaited a frame callback and the depth pass works on a fifth-size scratch surface, but `sharpen()` walked every pixel of the full frame in one go. It now processes row bands of ~1.5 M px and yields between them, so the shutter animation and toast keep painting on slow phones. *(done 2026-11-01)*
 - [x] `sharpScore()` allocated a fresh 320 px canvas and grey buffer for every burst candidate (~3 MB of RGBA each). One scratch surface and one `Float32Array` are now reused across frames. *(done 2026-11-01)*
 - [x] Blob object URLs from `URL.createObjectURL` are never revoked. Revoke on drop and cap `items` (~30) so a long session cannot exhaust memory. *(done 2026-11-01)*
+- [x] The viewer replaced `#vm`'s markup on every prev/next tap while the outgoing `<video>` was still playing, so the detached element kept its blob source and decoder buffers alive until GC and nothing guaranteed it stayed paused outside Blink. `renderView()` now pauses it and releases the source (`stopViewMedia()`) before the swap, freeing the decoder on the spot; measured: outgoing video goes from playing-with-`src` to paused-with-no-`src` on the first prev tap. *(done 2026-11-02)*

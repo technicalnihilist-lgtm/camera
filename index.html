@@ -700,7 +700,19 @@ $('#shut').onclick=async()=>{
   finally{busy=false}};
 
 /* ---------- viewer ---------- */
+/* The viewer swaps #vm's markup on every prev/next tap, and the outgoing <video>
+   used to be dropped by that innerHTML write while it was still playing: the
+   detached element keeps its blob source and its decoder buffers alive until it
+   is garbage collected, and nothing guarantees it stays paused outside Blink.
+   Tapping through a handful of clips therefore piled up dead players and their
+   decoded frames. Pause it and release the source before the markup is
+   replaced, so the decoder is freed on the spot. */
+function stopViewMedia(){const m=$('#vm').querySelector('video');
+  if(!m)return;
+  try{m.pause()}catch(e){}
+  try{m.removeAttribute('src');m.load()}catch(e){}}
 function renderView(){const it=items[vi];if(!it)return;
+  stopViewMedia();
   $('#vm').innerHTML=it.t==='i'?`<img src="${it.u}" alt="">`
     :`<video src="${it.u}" controls playsinline autoplay${it.p?` poster="${it.p}"`:''}></video>`;
   const s=$('#vs');s.href=it.u;s.download='camera-'+Date.now()+'.'+it.x;
