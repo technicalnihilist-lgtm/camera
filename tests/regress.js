@@ -99,6 +99,33 @@ const check = (name, ok, detail) => {
       'got ' + got.toFixed(3) + ' want ' + shot.aspect.toFixed(3));
   }
 
+  // Detail boost runs in place over row bands now: it must still produce
+  // exactly the bytes the reference convolution does, borders included
+  const sharp = await page.evaluate(async () => {
+    const w = 97, h = 61, k = 0.4;
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    const im = x.createImageData(w, h), d = im.data;
+    let s = 7;
+    for (let i = 0; i < d.length; i++) { s = (s * 1103515245 + 12345) & 0x7fffffff; d[i] = (s >>> 16) & 255; }
+    for (let i = 3; i < d.length; i += 4) d[i] = 255;
+    x.putImageData(im, 0, 0);
+    // read back first: the reference must start from the bytes the canvas holds
+    const src = new Uint8ClampedArray(x.getImageData(0, 0, w, h).data), ref = new Uint8ClampedArray(src);
+    const cn = 1 + 4 * k, st = w * 4;
+    for (let j = 1; j < h - 1; j++) for (let i = 1; i < w - 1; i++) {
+      const p = (j * w + i) * 4;
+      for (let q = p; q < p + 3; q++) ref[q] = cn * src[q] - k * (src[q - 4] + src[q + 4] + src[q - st] + src[q + st]);
+    }
+    await sharpen(c, k);
+    const got = x.getImageData(0, 0, w, h).data;
+    let diff = 0;
+    for (let i = 0; i < ref.length; i++) if (ref[i] !== got[i]) diff++;
+    return { diff, n: ref.length };
+  });
+  check('detail boost is byte-identical to the reference', sharp.diff === 0,
+    sharp.diff + ' of ' + sharp.n + ' bytes differ');
+
   // settings sheet
   await page.click('#bS');
   await wait(900);

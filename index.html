@@ -631,18 +631,31 @@ function sharpScore(src,sx,sy,sw,sh){const w=320,h=Math.max(8,Math.round(w*sh/sw
     return s2/n-(s/n)*(s/n)}catch(e){return 0}}
 /* Detail boost is the one capture stage that touches every pixel of the full
    frame (~12 MP), so it used to freeze the main thread for a few hundred ms
-   right as the shutter animation and the toast were running. Each output pixel
-   reads only the untouched source buffer, so the work splits into row bands
-   that yield between them: same bytes out, no dropped frames. */
+   right as the shutter animation and the toast were running; it works in row
+   bands that yield between them now, so the frames keep painting.
+   It also used to read the frame back with getImageData and copy all of it into
+   a second full-size buffer — two ~48 MB arrays at 12 MP, allocated on the
+   shutter's critical path, and a transient spike that size is what gets a
+   WebView killed on a low-end phone. The second buffer is gone: each row's
+   original bytes are carried forward in two row-sized scratch arrays and the
+   result is written straight back into the ImageData, so the boost holds one
+   frame buffer instead of two and skips a 48 MB copy. Every output pixel still
+   reads only original source bytes — the row above from the carry, the row
+   below before it is written — so the bytes it produces are identical. */
 const SHARP_BAND_PX=1.5e6;
-async function sharpen(c,k){const w=c.width,h=c.height,x=c.getContext('2d'),im=x.getImageData(0,0,w,h),s=im.data,o=new Uint8ClampedArray(s.length),cn=1+4*k,st=w*4;
-  o.set(s);
+async function sharpen(c,k){const w=c.width,h=c.height;
+  if(w<3||h<3)return;
+  const x=c.getContext('2d'),im=x.getImageData(0,0,w,h),s=im.data,cn=1+4*k,st=w*4;
   const band=Math.max(64,Math.ceil(SHARP_BAND_PX/Math.max(1,w)));
+  let up=new Uint8ClampedArray(st),cur=new Uint8ClampedArray(st);
+  up.set(s.subarray(0,st));
   for(let j0=1;j0<h-1;j0+=band){const j1=Math.min(h-1,j0+band);
-    for(let j=j0;j<j1;j++){let p=(j*w+1)*4;for(let i=1;i<w-1;i++,p+=4){
-      for(let q=p;q<p+3;q++)o[q]=cn*s[q]-k*(s[q-4]+s[q+4]+s[q-st]+s[q+st])}}
+    for(let j=j0;j<j1;j++){const o=j*st,d=o+st;
+      cur.set(s.subarray(o,o+st));
+      for(let l=4;l<st-4;l+=4)for(let q=l;q<l+3;q++)s[o+q]=cn*cur[q]-k*(cur[q-4]+cur[q+4]+up[q]+s[d+q]);
+      const t=up;up=cur;cur=t}
     if(j1<h-1)await sleep(0)}
-  im.data.set(o);x.putImageData(im,0,0)}
+  x.putImageData(im,0,0)}
 const nextFrame=()=>new Promise(r=>v.requestVideoFrameCallback?v.requestVideoFrameCallback(()=>r()):setTimeout(r,40));
 async function snap(){
   const fx=$('#fx');killAnims(fx);fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
