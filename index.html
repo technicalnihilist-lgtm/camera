@@ -288,7 +288,22 @@ $('#rT').oninput=()=>{applyGlass();saveCfg()};$('#rB').oninput=()=>{applyBounce(
 $('#rB').onchange=()=>spr($('#sheet'),{s:.93},{s:1});
 $('#snd').onclick=()=>{S.snd=!S.snd;$('#snd .sw').classList.toggle('on',S.snd);if(S.snd)plop();saveCfg()};
 $('#bS').onclick=()=>{if(rec)return toast('Stop recording first');showSheet($('#sheet'))};
-function saveCfg(){try{localStorage.setItem('lgc.cfg',JSON.stringify({t:$('#rT').value,b:$('#rB').value,snd:S.snd,par:D.par,pk:$('#rP').value,dp:D.depth,dk:$('#rD').value}))}catch(e){}}
+/* Every slider `input` event wrote the whole config straight to localStorage:
+   dragging one slider across the sheet fires ~60 input events, so a single drag
+   ran 58 synchronous JSON.stringify + setItem calls (~87 ms of main-thread time
+   measured, and each one is a storage commit in the WebView) interleaved with
+   the frames that have to repaint the glass panel and the value readout. The
+   value on screen still updates on every event — only the write is coalesced:
+   one commit 250 ms after the last change, or immediately when the drag ends
+   (`change`), the page is hidden, or it is being unloaded, so nothing is lost. */
+let cfgT=0,cfgDirty=false;
+function writeCfg(){cfgDirty=false;
+  try{localStorage.setItem('lgc.cfg',JSON.stringify({t:$('#rT').value,b:$('#rB').value,snd:S.snd,par:D.par,pk:$('#rP').value,dp:D.depth,dk:$('#rD').value}))}catch(e){}}
+function saveCfg(){cfgDirty=true;clearTimeout(cfgT);cfgT=setTimeout(()=>{cfgT=0;writeCfg()},250)}
+function flushCfg(){if(!cfgDirty)return;clearTimeout(cfgT);cfgT=0;writeCfg()}
+addEventListener('change',flushCfg,true);
+addEventListener('pagehide',flushCfg);
+addEventListener('visibilitychange',()=>{if(document.hidden)flushCfg()});
 function loadCfg(){let c=null;try{c=JSON.parse(localStorage.getItem('lgc.cfg')||'null')}catch(e){}
   if(!c||typeof c!=='object')return;
   const set=(id,v)=>{if(v!=null&&v!=='')try{$(id).value=v}catch(e){}};
