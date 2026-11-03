@@ -653,12 +653,25 @@ async function snap(){
   if(!b)return toast('Could not save the photo');
   add({t:'i',u:URL.createObjectURL(b),x:'jpg'});
   toast('Saved '+w+' × '+h+' · '+(w*h/1e6).toFixed(1)+' MP'+(nat?' · sensor':'')+(got>1?' · best of '+got:'')+(boosted?' · enhanced':''))}
-let counting=false,cdCancel=false;
+/* The countdown's 1 s tick was a plain `sleep`, which cannot be interrupted, so
+   a cancel only took effect when the tick happened to run out: the shutter, the
+   flip, zoom and mode buttons all stayed locked behind `busy` for the rest of
+   that second (measured 809 ms) and answered "Wait for the timer to finish" for
+   a timer that had already been cancelled. The tick is now a cancellable wait —
+   cancelCd() clears the pending timeout and resolves it at once — so the
+   countdown stops on the same frame, the overlay is cleared, and nothing can be
+   captured after a cancel. */
+let counting=false,cdCancel=false,cdWake=null;
+function cdWait(ms){return new Promise(ok=>{const t=setTimeout(()=>{cdWake=null;ok(true)},ms);
+  cdWake=()=>{clearTimeout(t);cdWake=null;ok(false)}})}
 async function countdown(){const cd=$('#cd');counting=true;cdCancel=false;
-  try{for(let n=S.tm;n>0;n--){cd.textContent=n;cd.style.opacity=1;spr(cd,{s:1.8,o:0},{s:1,o:1});plop();await sleep(1000);if(cdCancel)return false}
-    return true}
-  finally{counting=false;cd.style.opacity=0;cd.textContent=''}}
-function cancelCd(){if(counting){cdCancel=true;toast('Timer cancelled')}}
+  try{for(let n=S.tm;n>0;n--){cd.textContent=n;cd.style.opacity=1;spr(cd,{s:1.8,o:0},{s:1,o:1});plop();
+      if(!(await cdWait(1000))||cdCancel)return false}
+    return !cdCancel}
+  finally{counting=false;cdWake=null;
+    if(cd.getAnimations)cd.getAnimations().forEach(a=>{try{a.cancel()}catch(e){}});
+    cd.style.opacity=0;cd.textContent=''}}
+function cancelCd(){if(counting&&!cdCancel){cdCancel=true;toast('Timer cancelled');if(cdWake)cdWake()}}
 
 /* ---------- video pipeline: crop + zoom baked into the recording ---------- */
 /* The poster is only a placeholder shown until the video's first frame decodes,

@@ -218,6 +218,44 @@ const check = (name, ok, detail) => {
   check('native save hands the bridge small slices', save.maxB64 <= 768 * 1024,
     'largest ' + (save.maxB64 / 1024).toFixed(0) + ' KB base64, longest stall ' + save.stall + ' ms');
 
+  // timer: a cancel must stop the countdown at once, and never capture
+  const p3 = await browser.newPage();
+  await p3.setViewport({ width: 400, height: 840 });
+  p3.on('pageerror', e => errors.push('pageerror(timer): ' + e.message));
+  p3.on('console', m => { if (m.type() === 'error') errors.push('console(timer): ' + m.text().slice(0, 160)); });
+  await p3.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const cdCancel = await p3.evaluate(async () => {
+    const shut = document.querySelector('#shut'), cd = document.querySelector('#cd');
+    S.tm = 10;
+    const n0 = items.length;
+    shut.click();                                  // countdown starts
+    await new Promise(k => setTimeout(k, 1200));
+    const shown = cd.textContent;
+    shut.click();                                  // cancel
+    await new Promise(k => requestAnimationFrame(() => k()));
+    const busyAfter = busy, textAfter = cd.textContent;
+    await new Promise(k => setTimeout(k, 1200));   // the tick it used to wait out
+    const blocked = (() => {
+      document.querySelector('#flip').click();
+      return /Wait for the timer/.test(document.querySelector('#toast').textContent);
+    })();
+    return { shown, busyAfter, textAfter, captured: items.length > n0, blocked };
+  });
+  check('cancelling the timer unlocks the shutter at once',
+    cdCancel.busyAfter === false && cdCancel.textAfter === '' && cdCancel.shown !== '',
+    'overlay "' + cdCancel.shown + '" -> "' + cdCancel.textAfter + '", busy ' + cdCancel.busyAfter);
+  check('a cancelled timer never captures', cdCancel.captured === false && cdCancel.blocked === false);
+  const cdFire = await p3.evaluate(async () => {
+    const n0 = items.length;
+    S.tm = 1;
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 40 && items.length === n0; i++) await new Promise(k => setTimeout(k, 250));
+    S.tm = 0;
+    return items.length > n0;
+  });
+  check('an uncancelled timer still captures', cdFire === true);
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
