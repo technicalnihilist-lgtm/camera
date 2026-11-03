@@ -142,6 +142,25 @@ const check = (name, ok, detail) => {
   check('video recorded and playable', !!vid && vid.w > 0 && vid.d > 0,
     vid ? vid.w + 'x' + vid.h + ' ' + vid.d.toFixed(1) + 's' : 'no video');
 
+  // closing the viewer must release the clip, not leave the detached <video>
+  // holding its blob source and decoder until GC
+  const closedView = await page.evaluate(async () => {
+    const v = document.querySelector('#vm video');
+    window.__ov = v;
+    document.querySelector('#vc').click();
+    await new Promise(k => setTimeout(k, 1800));   // let the sheet animate out
+    const o = window.__ov;
+    return {
+      vmEmpty: document.querySelector('#vm').innerHTML === '',
+      hidden: document.querySelector('#view').hidden,
+      paused: o ? o.paused : null,
+      src: o ? (o.getAttribute('src') || '') : 'released',
+    };
+  });
+  check('closing the viewer releases the clip',
+    closedView.vmEmpty && closedView.hidden && closedView.paused === true && closedView.src === '',
+    'src ' + (closedView.src ? 'kept' : 'released') + ', paused ' + closedView.paused);
+
   // native save through the Android bridge (only wired when window.AndroidCam exists)
   const p2 = await browser.newPage();
   await p2.setViewport({ width: 400, height: 840 });
@@ -247,10 +266,16 @@ const check = (name, ok, detail) => {
     'overlay "' + cdCancel.shown + '" -> "' + cdCancel.textAfter + '", busy ' + cdCancel.busyAfter);
   check('a cancelled timer never captures', cdCancel.captured === false && cdCancel.blocked === false);
   const cdFire = await p3.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    // the cancel test above flipped the camera, so the preview is re-acquiring
+    // the sensor; a shutter tapped into that gap returns 'Camera is not ready'
+    // and never retries. Wait for a live frame first, and allow for a slow
+    // burst + sharpen + encode on a loaded pod rather than a fixed 10 s.
+    for (let i = 0; i < 40 && !document.querySelector('#v').videoWidth; i++) await w(250);
     const n0 = items.length;
     S.tm = 1;
     document.querySelector('#shut').click();
-    for (let i = 0; i < 40 && items.length === n0; i++) await new Promise(k => setTimeout(k, 250));
+    for (let i = 0; i < 120 && items.length === n0; i++) await w(500);
     S.tm = 0;
     return items.length > n0;
   });

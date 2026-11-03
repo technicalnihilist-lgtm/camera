@@ -268,7 +268,13 @@ function showSheet(el){if(openS===el)return;if(openS)hideSheet(true);
 function hideSheet(instant){const el=openS;if(!el)return;openS=null;app.classList.remove('sc');
   el.querySelectorAll('video').forEach(m=>{try{m.pause()}catch(e){}});
   clearTimeout(hideSheet.t);el.style.pointerEvents='none';
-  const done=()=>{if(openS===el)return;el.hidden=true;el.style.pointerEvents='';if(el.id==='view')$('#vm').innerHTML='';
+  /* Closing the viewer used to empty #vm and leave the clip's <video> detached
+     with its blob source still attached and its decoder still allocated, so the
+     last clip of every session stayed alive until garbage collection — the same
+     leak renderView() was fixed for on prev/next, on the far more common way out
+     of the viewer. Release it as the element is discarded: the sheet is already
+     hidden here, so nothing on screen changes. */
+  const done=()=>{if(openS===el)return;el.hidden=true;el.style.pointerEvents='';if(el.id==='view'){stopViewMedia();$('#vm').innerHTML=''}
     const a=sprAnims.get(el);if(a){try{a.cancel()}catch(e){}}sprAnims.delete(el)};
   if(instant){done();return}
   spr(el,{s:1,y:0,o:1},{s:.82,y:100,o:0},{k:1.5,end:done});
