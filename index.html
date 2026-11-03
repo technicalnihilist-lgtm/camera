@@ -239,6 +239,20 @@ function spr(el,a,b,o={}){if(!el)return;const{T}=spC();
   sprAnims.set(el,an);
   an.onfinish=()=>{if(o.end)o.end();try{an.cancel()}catch(e){}};return an}
 
+/* Element.getAnimations() landed in Chrome 84, four years after el.animate()
+   (Chrome 36), so an older WebView has animate() but no getAnimations(). All
+   five call sites below reached for it unguarded, and every one of them is on a
+   hot path: the first line of snap() cancels the focus/flash ring, so on such a
+   WebView the shutter threw before it ever read a frame and no photo could be
+   taken at all; toast() threw before it could show anything, so the capture,
+   timer, zoom, flash and recording messages were all silent; and moveInd threw
+   on every mode switch and resize, leaving the indicator behind. Cancel through
+   one guarded helper instead — identical behaviour where the API exists, no
+   throw where it does not. */
+function killAnims(el){if(!el||typeof el.getAnimations!=='function')return;
+  let l;try{l=el.getAnimations()}catch(e){return}
+  for(const a of l)try{a.cancel()}catch(e){}}
+
 /* ---------- water sound ---------- */
 let AC;
 function plop(){if(!S.snd)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();
@@ -282,7 +296,7 @@ function hideSheet(instant){const el=openS;if(!el)return;openS=null;app.classLis
 $('#scrim').onclick=()=>hideSheet();$('#sdone').onclick=()=>hideSheet();$('#vc').onclick=()=>hideSheet();
 
 /* ---------- toast ---------- */
-function toast(m){const t=$('#toast');t.textContent=m;t.getAnimations().forEach(a=>a.cancel());
+function toast(m){const t=$('#toast');t.textContent=m;killAnims(t);
   spr(t,{s:.7,y:-16,o:0},{s:1,y:0,o:1},{end:()=>t.style.opacity=1});
   clearTimeout(toast.t);toast.t=setTimeout(()=>{spr(t,{s:1,y:0,o:1},{s:.8,y:-14,o:0},{k:1.5,end:()=>t.style.opacity=0})},1900)}
 
@@ -445,7 +459,7 @@ $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on t
 
 /* ---------- modes ---------- */
 function moveInd(first){const b=$('.modes .on'),l=b.offsetLeft,w=b.offsetWidth,i=$('#ind');
-  if(!first&&prev){const{p,T}=spC();i.getAnimations().forEach(a=>a.cancel());
+  if(!first&&prev){const{p,T}=spC();killAnims(i);
     i.animate(p.map(x=>({left:prev.l+(l-prev.l)*x+'px',width:Math.max(20,prev.w+(w-prev.w)*x)+'px'})),{duration:T*1000})}
   i.style.left=l+'px';i.style.width=w+'px';prev={l,w}}
 $$('.modes button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to change mode':'Wait for the timer to finish');S.mode=b.dataset.m;
@@ -551,7 +565,7 @@ $('#flip').onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to flip ca
   S.face=S.face==='user'?'environment':'user';flipR+=180;$('#flip svg').style.transform=`rotate(${flipR}deg)`;
   spr($('#stage'),{s:.93},{s:1});start()};
 $('#stage').addEventListener('pointerdown',e=>{if(e.target.closest('.g'))return;if(E.af)focusAt(e);const r=app.getBoundingClientRect(),f=$('#focus');
-  f.style.left=e.clientX-r.left+'px';f.style.top=e.clientY-r.top+'px';f.getAnimations().forEach(a=>a.cancel());
+  f.style.left=e.clientX-r.left+'px';f.style.top=e.clientY-r.top+'px';killAnims(f);
   spr(f,{s:1.7,o:0},{s:1,o:1});f.animate([{opacity:1},{opacity:1,offset:.7},{opacity:0}],{duration:1400})});
 
 /* ---------- framing: what the preview shows is what gets captured ---------- */
@@ -631,7 +645,7 @@ async function sharpen(c,k){const w=c.width,h=c.height,x=c.getContext('2d'),im=x
   im.data.set(o);x.putImageData(im,0,0)}
 const nextFrame=()=>new Promise(r=>v.requestVideoFrameCallback?v.requestVideoFrameCallback(()=>r()):setTimeout(r,40));
 async function snap(){
-  const fx=$('#fx');fx.getAnimations().forEach(a=>a.cancel());fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
+  const fx=$('#fx');killAnims(fx);fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
   spr($('#stage'),{s:.96},{s:1});
   if(!v.videoWidth||!v.videoHeight)return toast('Camera is not ready yet');
   const useIc=!!ic&&!torchOn,n=E.burst?(useIc?3:5):1;
@@ -675,7 +689,7 @@ async function countdown(){const cd=$('#cd');counting=true;cdCancel=false;
       if(!(await cdWait(1000))||cdCancel)return false}
     return !cdCancel}
   finally{counting=false;cdWake=null;
-    if(cd.getAnimations)cd.getAnimations().forEach(a=>{try{a.cancel()}catch(e){}});
+    killAnims(cd);
     cd.style.opacity=0;cd.textContent=''}}
 function cancelCd(){if(counting&&!cdCancel){cdCancel=true;toast('Timer cancelled');if(cdWake)cdWake()}}
 

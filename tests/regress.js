@@ -281,6 +281,49 @@ const check = (name, ok, detail) => {
   });
   check('an uncancelled timer still captures', cdFire === true);
 
+  // release the other pages first: the fake camera serves one stream at a time
+  // and a page that cannot get one would fail this check for the wrong reason
+  await page.close(); await p2.close(); await p3.close();
+
+  // an older WebView has el.animate() (Chrome 36) but no Element.getAnimations()
+  // (Chrome 84); every cancel site used to reach for it unguarded and moveInd
+  // runs during boot, so the throw left the app on a dead gate with no camera
+  const p4 = await browser.newPage();
+  await p4.setViewport({ width: 400, height: 840 });
+  const oldErrors = [];
+  p4.on('pageerror', e => oldErrors.push(e.message));
+  p4.on('console', m => { if (m.type() === 'error') oldErrors.push(m.text().slice(0, 160)); });
+  await p4.evaluateOnNewDocument(() => {
+    delete Element.prototype.getAnimations;
+    delete Document.prototype.getAnimations;
+  });
+  await p4.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const noWaapi = await p4.evaluate(async () => {
+    const q = s => document.querySelector(s);
+    const out = { has: typeof Element.prototype.getAnimations, gate: q('#gate').hidden,
+      vw: q('#v').videoWidth, toast: '', err: '' };
+    // a toast must still render without the cancel path throwing
+    try {
+      toast('probe');
+      await new Promise(k => setTimeout(k, 120));
+      out.toast = q('#toast').textContent;
+      // the shutter cancels the flash ring before it reads a frame, so this is
+      // the path that used to make capture impossible without getAnimations()
+      const n0 = items.length;
+      q('#shut').click();
+      for (let i = 0; i < 40 && items.length === n0; i++) await new Promise(k => setTimeout(k, 500));
+      out.shot = items.length > n0;
+    } catch (e) { out.err = String((e && e.message) || e); }
+    return out;
+  });
+  check('boots without Element.getAnimations',
+    noWaapi.has === 'undefined' && !noWaapi.err && noWaapi.gate === true && noWaapi.vw > 0 &&
+    noWaapi.toast !== '' && noWaapi.shot === true,
+    'getAnimations ' + noWaapi.has + ', preview ' + noWaapi.vw + ', toast "' + noWaapi.toast + '"' +
+    ', shot ' + noWaapi.shot + (noWaapi.err ? ', threw ' + noWaapi.err : ''));
+  check('no errors without Element.getAnimations', oldErrors.length === 0, oldErrors.slice(0, 2).join(' | '));
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
