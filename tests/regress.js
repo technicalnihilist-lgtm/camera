@@ -142,6 +142,82 @@ const check = (name, ok, detail) => {
   check('video recorded and playable', !!vid && vid.w > 0 && vid.d > 0,
     vid ? vid.w + 'x' + vid.h + ' ' + vid.d.toFixed(1) + 's' : 'no video');
 
+  // native save through the Android bridge (only wired when window.AndroidCam exists)
+  const p2 = await browser.newPage();
+  await p2.setViewport({ width: 400, height: 840 });
+  p2.on('pageerror', e => errors.push('pageerror(native): ' + e.message));
+  p2.on('console', m => { if (m.type() === 'error') errors.push('console(native): ' + m.text().slice(0, 160)); });
+  await p2.evaluateOnNewDocument(() => {
+    const acc = [];
+    window.__br = { calls: 0, maxB64: 0, bytes: 0, mime: '', aborted: false };
+    window.AndroidCam = {
+      open(mime) { window.__br.mime = mime; return 1; },
+      write(id, b64) {
+        // stand in for the Java-side Base64.decode + FileOutputStream.write: an
+        // @JavascriptInterface call does not return until that work is done, so
+        // the JS thread is blocked for the whole round trip
+        const end = performance.now() + b64.length * 3 / 1e6;
+        while (performance.now() < end) { /* block */ }
+        window.__br.calls++;
+        if (b64.length > window.__br.maxB64) window.__br.maxB64 = b64.length;
+        const s = atob(b64), u = new Uint8Array(s.length);
+        for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+        acc.push(u); window.__br.bytes += u.length;
+        return 'ok';
+      },
+      close() { window.__br.acc = acc; return 'ok ' + window.__br.bytes; },
+      abort() { window.__br.aborted = true; },
+    };
+    window.__saved = () => {
+      const out = new Uint8Array(window.__br.bytes);
+      let o = 0;
+      for (const u of window.__br.acc) { out.set(u, o); o += u.length; }
+      return out;
+    };
+  });
+  await p2.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  // a clip of known size: 8 MB goes through the bridge in many slices however the
+  // chunk size is set, and the bytes are known, so the loop is checked end to end
+  const CLIP = 8 * 1024 * 1024;
+  await p2.evaluate(n => {
+    const b = new Uint8Array(n);
+    for (let i = 0; i < n; i += 997) b[i] = (i * 31) & 255;
+    items.push({ t: 'v', u: URL.createObjectURL(new Blob([b], { type: 'video/webm' })), x: 'webm', p: '' });
+    vi = items.length - 1;
+    window.__st = { max: 0, last: 0, on: true };
+    const tick = () => {
+      const t = performance.now();
+      if (window.__st.last) window.__st.max = Math.max(window.__st.max, t - window.__st.last);
+      window.__st.last = t;
+      if (window.__st.on) setTimeout(tick, 0);
+    };
+    setTimeout(tick, 0);
+    document.querySelector('#vs').click();
+  }, CLIP);
+  let toastTxt = '';
+  for (let i = 0; i < 80; i++) {
+    await wait(250);
+    toastTxt = await p2.evaluate(() => document.querySelector('#toast').textContent);
+    if (/Saved to your Gallery|Could not save/.test(toastTxt)) break;
+  }
+  const save = await p2.evaluate(async () => {
+    window.__st.on = false;
+    const it = items[items.length - 1];
+    const src = new Uint8Array(await (await fetch(it.u)).arrayBuffer());
+    const got = window.__saved();
+    let same = src.length === got.length;
+    if (same) for (let i = 0; i < src.length; i++) if (src[i] !== got[i]) { same = false; break; }
+    return { toast: document.querySelector('#toast').textContent, src: src.length, got: got.length,
+      same, calls: window.__br.calls, maxB64: window.__br.maxB64,
+      stall: +window.__st.max.toFixed(1), aborted: window.__br.aborted };
+  });
+  check('native save writes the clip byte for byte',
+    save.same && save.src === save.got && save.src > 0 && !save.aborted,
+    save.src + ' bytes in ' + save.calls + ' calls');
+  check('native save hands the bridge small slices', save.maxB64 <= 768 * 1024,
+    'largest ' + (save.maxB64 / 1024).toFixed(0) + ' KB base64, longest stall ' + save.stall + ' ms');
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
