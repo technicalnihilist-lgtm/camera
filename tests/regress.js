@@ -373,6 +373,61 @@ const check = (name, ok, detail) => {
     ', shot ' + noWaapi.shot + (noWaapi.err ? ', threw ' + noWaapi.err : ''));
   check('no errors without Element.getAnimations', oldErrors.length === 0, oldErrors.slice(0, 2).join(' | '));
 
+  // the water sound's AudioContext used to be created on the first tap and left
+  // running for the rest of the session, holding the audio output stream (and the
+  // device's audio hardware) awake for silence. It must sleep once its sound is
+  // over, wake for the next tap, and let go as soon as the page is hidden.
+  await p4.close();
+  const p5 = await browser.newPage();
+  await p5.setViewport({ width: 400, height: 840 });
+  const audioErrors = [];
+  p5.on('pageerror', e => audioErrors.push('pageerror(audio): ' + e.message));
+  p5.on('console', m => { if (m.type() === 'error') audioErrors.push('console(audio): ' + m.text().slice(0, 160)); });
+  await p5.evaluateOnNewDocument(() => {
+    window.__osc = 0;
+    const P = (window.AudioContext || window.webkitAudioContext).prototype;
+    const co = P.createOscillator;
+    P.createOscillator = function () { window.__osc++; return co.apply(this, arguments); };
+  });
+  await p5.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const acState = () => p5.evaluate(() => ({
+    state: typeof AC === 'undefined' || !AC ? 'none' : AC.state,
+    clock: typeof AC === 'undefined' || !AC ? 0 : AC.currentTime,
+    osc: window.__osc,
+  }));
+  await p5.evaluate(() => { S.snd = true; });
+  await p5.click('#bG');
+  await wait(250);
+  const acOn = await acState();
+  await wait(1800);
+  const acIdleState = await acState();
+  await wait(300);
+  const acFrozen = await acState();
+  await p5.click('#bG');
+  await wait(250);
+  const acWoken = await acState();
+  await wait(300);
+  const acClock = await acState();
+  const acHidden = await p5.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 250));
+    return AC ? AC.state : 'none';
+  });
+  check('the audio context sleeps once its sound has finished',
+    acOn.state === 'running' && acOn.osc > 0 && acIdleState.state === 'suspended' &&
+    Math.abs(acFrozen.clock - acIdleState.clock) < 0.02,
+    acOn.state + ' (' + acOn.osc + ' oscillators) -> ' + acIdleState.state +
+    ', clock ' + acIdleState.clock.toFixed(2) + ' -> ' + acFrozen.clock.toFixed(2) + ' while asleep');
+  check('a tap after the sleep still plays the sound',
+    acWoken.state === 'running' && acWoken.osc > acOn.osc && acClock.clock > acWoken.clock,
+    acWoken.state + ', ' + acWoken.osc + ' oscillators, clock ' +
+    acWoken.clock.toFixed(2) + ' -> ' + acClock.clock.toFixed(2));
+  check('hiding the page releases the audio context', acHidden === 'suspended', acHidden);
+  check('no errors from the audio path', audioErrors.length === 0, audioErrors.slice(0, 2).join(' | '));
+  await p5.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

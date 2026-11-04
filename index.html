@@ -254,8 +254,23 @@ function killAnims(el){if(!el||typeof el.getAnimations!=='function')return;
   for(const a of l)try{a.cancel()}catch(e){}}
 
 /* ---------- water sound ---------- */
-let AC;
-function plop(){if(!S.snd)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state==='suspended')AC.resume();
+/* plop() created one AudioContext on the first tap and then left it running for
+   the rest of the session. A running context keeps the audio output stream open,
+   so the device's audio hardware never idles down between the ~0.2 s blips this
+   app plays — on a phone that is the audio DSP and its clock held awake for the
+   whole time the camera is open, for silence. It is suspended once the sound it
+   was started for has finished and immediately when the page is hidden, and
+   plop() resumes it for the next tap (the resume happens inside the pointerdown
+   that caused it, so it is still a user gesture). The idle window is longer than
+   the countdown's 1 s tick, so a running timer keeps the context awake across
+   its own beeps instead of suspending and resuming once a second. */
+let AC,acIdle=0;
+function acSuspend(){clearTimeout(acIdle);acIdle=0;
+  try{if(AC&&AC.state==='running'){const p=AC.suspend();if(p&&p.catch)p.catch(()=>{})}}catch(e){}}
+addEventListener('visibilitychange',()=>{if(document.hidden)acSuspend()});
+function plop(){if(!S.snd)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();
+  if(AC.state==='suspended'){const p=AC.resume();if(p&&p.catch)p.catch(()=>{})}
+  clearTimeout(acIdle);acIdle=setTimeout(acSuspend,1200);
   const t=AC.currentTime,r=Math.random();
   const bub=(d,f0,f1,vol,len)=>{const o=AC.createOscillator(),g=AC.createGain();o.type='sine';
     o.frequency.setValueAtTime(f0,t+d);o.frequency.exponentialRampToValueAtTime(f1,t+d+len*.7);
