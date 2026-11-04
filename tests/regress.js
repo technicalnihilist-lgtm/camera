@@ -159,6 +159,9 @@ const check = (name, ok, detail) => {
   const rec = await page.evaluate(() => document.querySelector('#app').classList.contains('rec'));
   check('recording starts', rec === true);
   await page.click('#shut'); await wait(2200);
+  // the poster is only a placeholder until the clip's first frame decodes, so
+  // note how big it is before the viewer can show that frame
+  const posterLen = await page.evaluate(() => ((items[items.length - 1] || {}).p || '').length);
   await page.click('#thumb'); await wait(1000);
   const vid = await page.evaluate(() => new Promise(res => {
     const v = document.querySelector('#vm video');
@@ -168,6 +171,25 @@ const check = (name, ok, detail) => {
   }));
   check('video recorded and playable', !!vid && vid.w > 0 && vid.d > 0,
     vid ? vid.w + 'x' + vid.h + ' ' + vid.d.toFixed(1) + 's' : 'no video');
+
+  // the poster data URI is a placeholder, not part of the clip: once the first
+  // frame is on screen it must be released instead of being kept for the life
+  // of the item (and past its eviction)
+  const posterDrop = await page.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    const it = items[vi], v = document.querySelector('#vm video');
+    for (let i = 0; i < 40 && v && v.readyState < 2; i++) await w(100);
+    await w(200);
+    return { after: (it.p || '').length, attr: v ? v.hasAttribute('poster') : null,
+      ready: v ? v.readyState : -1, src: v ? v.currentSrc !== '' : false,
+      w: v ? v.videoWidth : 0 };
+  });
+  check('the poster data URI is released once the clip has loaded',
+    posterLen > 1000 && posterDrop.after === 0 && posterDrop.attr === false &&
+    posterDrop.ready >= 2 && posterDrop.src && posterDrop.w > 0,
+    'poster ' + posterLen + ' chars -> ' + posterDrop.after + ', attribute ' +
+    (posterDrop.attr ? 'kept' : 'removed') + ', readyState ' + posterDrop.ready +
+    ', ' + posterDrop.w + 'px frame');
 
   // closing the viewer must release the clip, not leave the detached <video>
   // holding its blob source and decoder until GC

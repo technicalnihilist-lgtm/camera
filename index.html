@@ -840,6 +840,15 @@ function renderView(){const it=items[vi];if(!it)return;
   stopViewMedia();
   $('#vm').innerHTML=it.t==='i'?`<img src="${it.u}" alt="">`
     :`<video src="${it.u}" controls playsinline autoplay${it.p?` poster="${it.p}"`:''}></video>`;
+  /* The poster is a ~55 KB base64 JPEG standing in for the clip's first frame,
+     and it was kept on the item for the rest of the session even though nothing
+     displays it once that frame has decoded — a fixed cost per recorded clip on
+     top of the clip itself, and one that outlives the item's eviction. Drop the
+     data URI the moment the frame it was covering is on screen, so the poster
+     only ever exists while it is actually the picture being shown. */
+  const m=$('#vm').querySelector('video');
+  if(m&&it.p){const drop=()=>{it.p='';try{m.removeAttribute('poster')}catch(e){}};
+    if(m.readyState>=2)drop();else m.addEventListener('loadeddata',drop,{once:true})}
   const s=$('#vs');s.href=it.u;s.download='camera-'+Date.now()+'.'+it.x;
   $('#vp').classList.toggle('off',vi<=0);$('#vn').classList.toggle('off',vi>=items.length-1)}
 $('#thumb').onclick=()=>{if(!items.length)return toast('Nothing captured yet');vi=items.length-1;renderView();showSheet($('#view'))};
