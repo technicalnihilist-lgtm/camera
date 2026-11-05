@@ -378,7 +378,22 @@ function parLoop(){
   if(Math.abs(tx-PAR.tx)>.0015||Math.abs(ty-PAR.ty)>.0015)PAR.raf=requestAnimationFrame(parLoop);
 }
 const clampP=v=>Math.max(-1,Math.min(1,v));
+/* The gyro subscription outlived the setting it exists for. enableTilt() is
+   armed on the first tap and `#t4d` only flipped a flag, so with "4D tilt
+   parallax" switched off — or with reduced motion, which turns it off at boot —
+   the page kept a `deviceorientation` listener for the rest of the session. That
+   listener is what keeps the device's rotation-vector sensor (gyro and
+   accelerometer, plus the fusion between them) sampling at the platform's event
+   rate for as long as the camera is open, and every event it delivered still ran
+   onTilt()'s maths only for parKick() to drop the result on the floor, because
+   PAR.on was false. The subscription now follows the setting: dropped the moment
+   parallax is switched off, taken up again when it is switched back on — from the
+   toggle's own click, so the iOS permission prompt is still raised inside a user
+   gesture — and a permission grant that lands after the setting was turned off is
+   not acted on. Nothing on screen changes: with 4D off the layers are already
+   parked at their rest position and the tilt handler already had no effect. */
 function onTilt(e){
+  if(!PAR.on)return;
   if(e.beta==null&&e.gamma==null)return;
   const b=e.beta||0,g=e.gamma||0;
   if(!PAR.base)PAR.base={b,g};
@@ -386,9 +401,11 @@ function onTilt(e){
   const dg=Math.max(-40,Math.min(40,g-PAR.base.g))/40;
   PAR.gyro=true;PAR.ax=clampP(-dg);PAR.ay=clampP(-db);parKick();
 }
+function disableTilt(){if(!PAR.listening)return;PAR.listening=false;
+  try{removeEventListener('deviceorientation',onTilt)}catch(e){}}
 function enableTilt(){
-  if(PAR.listening)return;
-  const start=()=>{if(PAR.listening)return;PAR.listening=true;addEventListener('deviceorientation',onTilt,{passive:true})};
+  if(PAR.listening||!PAR.on)return;
+  const start=()=>{if(PAR.listening||!PAR.on)return;PAR.listening=true;addEventListener('deviceorientation',onTilt,{passive:true})};
   try{
     if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
       DeviceOrientationEvent.requestPermission().then(r=>{if(r==='granted')start()}).catch(()=>{});
@@ -403,10 +420,11 @@ addEventListener('pointermove',e=>{
   PAR.ay=clampP((e.clientY-r.top)/r.height*2-1);
   parKick();
 },{passive:true});
+let parTouch=false;
 function applyPar(){
   PAR.on=D.par;app.classList.toggle('par',D.par);
-  if(!D.par){PAR.ax=PAR.ay=PAR.tx=PAR.ty=0;parReset();if(PAR.raf){cancelAnimationFrame(PAR.raf);PAR.raf=0}}
-  else parKick();
+  if(!D.par){PAR.ax=PAR.ay=PAR.tx=PAR.ty=0;parReset();if(PAR.raf){cancelAnimationFrame(PAR.raf);PAR.raf=0}disableTilt()}
+  else{if(parTouch)enableTilt();parKick()}
 }
 
 /* ---------- depth of field ---------- */
@@ -461,7 +479,7 @@ $('#t4d').onclick=()=>{D.par=!D.par;$('#t4d .sw').classList.toggle('on',D.par);a
 function applyParStrength(){const v=+$('#rP').value;PAR.k=v/60;$('#op').textContent=PAR.k.toFixed(1)+'\u00d7'}
 $('#rP').oninput=()=>{applyParStrength();parKick();saveCfg()};
 applyParStrength();syncDepth();applyDepth();applyPar();
-addEventListener('pointerdown',enableTilt,{once:true,passive:true});
+addEventListener('pointerdown',()=>{parTouch=true;enableTilt()},{once:true,passive:true});
 
 /* ---------- top buttons ---------- */
 $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.toggle('on');e.currentTarget.setAttribute('aria-pressed',app.classList.contains('grid'))};

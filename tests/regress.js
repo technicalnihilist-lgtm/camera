@@ -551,6 +551,51 @@ const check = (name, ok, detail) => {
     ', busy ' + stalled.busy + ', next tap captured ' + stalled.again);
   await p7.close();
 
+  // the tilt sensor subscription follows the 4D setting
+  const p8 = await browser.newPage();
+  await p8.setViewport({ width: 400, height: 840 });
+  await p8.evaluateOnNewDocument(() => {
+    window.__do = { add: 0, remove: 0 };
+    const A = EventTarget.prototype.addEventListener, R = EventTarget.prototype.removeEventListener;
+    EventTarget.prototype.addEventListener = function (t, f, o) {
+      if (t === 'deviceorientation' && this === window) window.__do.add++;
+      return A.call(this, t, f, o);
+    };
+    EventTarget.prototype.removeEventListener = function (t, f, o) {
+      if (t === 'deviceorientation' && this === window) window.__do.remove++;
+      return R.call(this, t, f, o);
+    };
+    // headless Chromium answers the sensor permission with 'prompt' and never
+    // resolves it, so stand in for a device where the user has allowed it
+    Object.defineProperty(DeviceOrientationEvent, 'requestPermission',
+      { configurable: true, value: () => Promise.resolve('granted') });
+  });
+  await p8.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const tilt = () => p8.evaluate(() => ({
+    add: __do.add, remove: __do.remove, on: PAR.on, listening: PAR.listening,
+  }));
+  const t0 = await tilt();
+  check('the tilt sensor is not subscribed before the first tap',
+    t0.add === 0 && t0.listening === false, 'adds ' + t0.add + ', listening ' + t0.listening);
+  await p8.mouse.click(200, 420);
+  await wait(400);
+  const t1 = await tilt();
+  check('the first tap subscribes the tilt sensor',
+    t1.add === 1 && t1.listening === true, 'adds ' + t1.add + ', listening ' + t1.listening);
+  await p8.click('#bS'); await wait(900);
+  await p8.click('#t4d'); await wait(400);
+  const t2 = await tilt();
+  check('turning 4D off releases the tilt sensor',
+    t2.on === false && t2.listening === false && t2.remove === 1,
+    '4D ' + t2.on + ', listening ' + t2.listening + ', removes ' + t2.remove);
+  await p8.click('#t4d'); await wait(400);
+  const t3 = await tilt();
+  check('turning 4D back on re-subscribes the tilt sensor',
+    t3.on === true && t3.listening === true && t3.add === 2 && t3.remove === 1,
+    '4D ' + t3.on + ', listening ' + t3.listening + ', adds ' + t3.add);
+  await p8.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
