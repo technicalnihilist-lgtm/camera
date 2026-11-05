@@ -428,6 +428,82 @@ const check = (name, ok, detail) => {
   check('no errors from the audio path', audioErrors.length === 0, audioErrors.slice(0, 2).join(' | '));
   await p5.close();
 
+  // applyConstraints() replaces a track's whole constraint set, so a hardware
+  // zoom set by the zoom row used to be dropped by the very next constraint set
+  // the app wrote — the resolution bump and the focus/exposure pass after a
+  // restart, the single-shot focus a tap on the preview asks for, its 3 s
+  // restore, and the torch toggle — while the zoom row still showed the tapped
+  // level. A camera that reports a zoom capability must see the zoom in every
+  // constraint set the app writes. (The fake device has no zoom, so it is
+  // advertised here and the calls themselves are what get checked.)
+  const p6 = await browser.newPage();
+  await p6.setViewport({ width: 400, height: 840 });
+  p6.on('pageerror', e => errors.push('pageerror(zoom): ' + e.message));
+  p6.on('console', m => { if (m.type() === 'error') errors.push('console(zoom): ' + m.text().slice(0, 160)); });
+  await p6.evaluateOnNewDocument(() => {
+    const P = MediaStreamTrack.prototype;
+    const caps = P.getCapabilities;
+    P.getCapabilities = function () {
+      let c = {};
+      try { c = caps.apply(this, arguments) || {}; } catch (e) { c = {}; }
+      return Object.assign({}, c, {
+        zoom: { min: 1, max: 3, step: 0.1 }, torch: false,
+        focusMode: ['continuous', 'single-shot', 'none'],
+        exposureMode: ['continuous', 'manual'],
+        whiteBalanceMode: ['continuous', 'manual'],
+        pointsOfInterest: true, width: { max: 3840 }, height: { max: 2160 },
+      });
+    };
+    const apply = P.applyConstraints;
+    window.__ac = [];
+    P.applyConstraints = function (cs) {
+      try { window.__ac.push({ id: this.id, cs: JSON.parse(JSON.stringify(cs || {})) }); } catch (e) {}
+      return apply.apply(this, arguments);
+    };
+    window.__last = () => {
+      const id = stream && stream.getVideoTracks()[0] && stream.getVideoTracks()[0].id;
+      const mine = window.__ac.filter(c => c.id === id);
+      return mine.length ? mine[mine.length - 1].cs : null;
+    };
+    window.__zoomOf = cs => {
+      if (!cs) return null;
+      const sets = (cs.advanced || []).concat([cs]);
+      for (const s of sets) if (s && s.zoom !== undefined) return s.zoom;
+      return null;
+    };
+  });
+  await p6.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const zoomRestart = await p6.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('.zoom button[data-z="2"]').click();
+    await w(400);
+    const afterTap = window.__zoomOf(window.__last());
+    document.querySelector('#flip').click();          // new stream + tune()
+    for (let i = 0; i < 40 && !document.querySelector('#v').videoWidth; i++) await w(250);
+    await w(1500);                                    // let tune() finish
+    return { afterTap, afterRestart: window.__zoomOf(window.__last()),
+      sets: window.__ac.length, z: S.z, dz: S.dz };
+  });
+  check('a camera restart keeps the hardware zoom',
+    zoomRestart.afterTap === 2 && zoomRestart.afterRestart === 2 && zoomRestart.dz === 1,
+    'zoom ' + zoomRestart.z + 'x: after the zoom tap ' + zoomRestart.afterTap +
+    ', after a flip + tune ' + zoomRestart.afterRestart + ' (S.dz ' + zoomRestart.dz + ')');
+
+  const zoomFocus = await p6.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    const st = document.querySelector('#stage');
+    st.dispatchEvent(new PointerEvent('pointerdown', { clientX: 200, clientY: 300, bubbles: true }));
+    await w(600);
+    const onTap = window.__zoomOf(window.__last());
+    await w(3200);                                    // the 3 s restore to continuous
+    return { onTap, afterRestore: window.__zoomOf(window.__last()) };
+  });
+  check('tap-to-focus keeps the hardware zoom, before and after its restore',
+    zoomFocus.onTap === 2 && zoomFocus.afterRestore === 2,
+    'on the tap ' + zoomFocus.onTap + ', after the 3 s restore ' + zoomFocus.afterRestore);
+  await p6.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

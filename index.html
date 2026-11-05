@@ -468,7 +468,8 @@ $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.togg
 $('#bT').onclick=e=>{S.tm=S.tm===0?3:S.tm===3?10:0;$('#tl').textContent=S.tm?S.tm+'s':'';e.currentTarget.classList.toggle('on',!!S.tm);e.currentTarget.setAttribute('aria-pressed',!!S.tm)};
 $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on this camera');
   const btn=e.currentTarget,next=!torchOn;
-  try{await stream.getVideoTracks()[0].applyConstraints({advanced:[{torch:next}]});
+  const za=zoomAdv();
+  try{await stream.getVideoTracks()[0].applyConstraints({advanced:za?[{torch:next},za]:[{torch:next}]});
     torchOn=next;btn.classList.toggle('on',torchOn);btn.setAttribute('aria-pressed',torchOn)}
   catch{toast('Flash could not turn on')}};
 
@@ -486,6 +487,20 @@ const track=()=>stream&&stream.getVideoTracks()[0];
 function vt(){v.style.transform=`scale(${(S.face==='user'?-1:1)*S.dz},${S.dz})`}
 function applyZoom(){const t=track(),c=(t&&t.getCapabilities&&t.getCapabilities())||{};
   if(c.zoom){const z=Math.min(c.zoom.max,Math.max(c.zoom.min,S.z));t.applyConstraints({advanced:[{zoom:z}]}).catch(()=>{});S.dz=1}else S.dz=S.z;vt()}
+/* applyConstraints() replaces the track's whole constraint set, so every
+   constraint set this app wrote after applyZoom() — the resolution bump and the
+   focus/exposure/white-balance pass in tune(), the single-shot focus a tap on
+   the preview asks for and its 3 s restore, and the torch toggle — silently
+   dropped the hardware zoom that was set, while the zoom row went on showing
+   the tapped level and the capture cropped as if the sensor really were zoomed
+   (S.dz is 1 whenever the camera reports a zoom capability). Carry the current
+   zoom inside the same advanced sets so it survives them; a camera with no
+   zoom capability returns null and every call site passes exactly the
+   constraint set it passed before. */
+function zoomAdv(){const t=track();if(!t||!t.getCapabilities)return null;
+  let c;try{c=t.getCapabilities()}catch(e){return null}
+  if(!c||!c.zoom)return null;
+  return{zoom:Math.min(c.zoom.max,Math.max(c.zoom.min,S.z))}}
 $$('.zoom button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to change zoom':'Wait for the timer to finish');
   S.z=+b.dataset.z;$$('.zoom button').forEach(x=>x.classList.toggle('on',x===b));applyZoom()});
 const SEC_HEAD='Camera blocked by browser security';
@@ -546,11 +561,12 @@ async function start(){
     const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).'}[n]||('Camera could not start ('+n+').');gate(m)}}
 /* ---------- capture engine: tuning, focus, readout ---------- */
 async function tune(s,c){const t=s.getVideoTracks()[0];if(!t)return;
+  const za=zoomAdv();
   try{if(E.q==='max'&&c.width&&c.height){const st=t.getSettings();
-    if(st.width&&st.width<c.width.max*.9)await t.applyConstraints({width:{ideal:c.width.max},height:{ideal:c.height.max},frameRate:{ideal:30}})}}catch(e){}
+    if(st.width&&st.width<c.width.max*.9)await t.applyConstraints(Object.assign({width:{ideal:c.width.max},height:{ideal:c.height.max},frameRate:{ideal:30}},za?{advanced:[za]}:{}))}}catch(e){}
   if(stream!==s)return;
   for(const k of ['focusMode','exposureMode','whiteBalanceMode']){
-    if(c[k]&&c[k].includes&&c[k].includes('continuous'))await t.applyConstraints({advanced:[{[k]:'continuous'}]}).catch(()=>{})}
+    if(c[k]&&c[k].includes&&c[k].includes('continuous'))await t.applyConstraints({advanced:za?[{[k]:'continuous'},za]:[{[k]:'continuous'}]}).catch(()=>{})}
   report()}
 function report(){const t=track();if(!t||!t.getSettings)return;const st=t.getSettings(),pc=photoCaps,mp=x=>(x/1e6).toFixed(1)+' MP';
   const rows=['Preview stream: '+(st.width||'?')+' × '+(st.height||'?')+(st.frameRate?' @ '+Math.round(st.frameRate)+' fps':'')];
@@ -564,8 +580,10 @@ async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
   if(c.pointsOfInterest)adv.pointsOfInterest=[{x,y}];
   if(c.focusMode&&c.focusMode.includes&&c.focusMode.includes('single-shot'))adv.focusMode='single-shot';
   if(!Object.keys(adv).length)return;
-  try{await t.applyConstraints({advanced:[adv]})}catch(err){return}
-  clearTimeout(afT);afT=setTimeout(()=>{if(track()===t&&c.focusMode&&c.focusMode.includes('continuous'))t.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{})},3000)}
+  const za=zoomAdv();
+  try{await t.applyConstraints({advanced:za?[adv,za]:[adv]})}catch(err){return}
+  clearTimeout(afT);afT=setTimeout(()=>{if(track()!==t||!c.focusMode||!c.focusMode.includes('continuous'))return;
+    const z2=zoomAdv();t.applyConstraints({advanced:z2?[{focusMode:'continuous'},z2]:[{focusMode:'continuous'}]}).catch(()=>{})},3000)}
 function gate(m,label,action){gbAction=action||'retry';$('#gm').textContent=m;$('#gb').textContent=label||'Allow camera';const g=$('#gate');g.hidden=false;spr($('#gate div'),{s:.85,o:0},{s:1,o:1})}
 let gbAction='retry',native=false;
 const fi=$('#fi');
