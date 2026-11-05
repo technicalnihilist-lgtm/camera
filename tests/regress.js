@@ -217,9 +217,9 @@ const check = (name, ok, detail) => {
   p2.on('console', m => { if (m.type() === 'error') errors.push('console(native): ' + m.text().slice(0, 160)); });
   await p2.evaluateOnNewDocument(() => {
     const acc = [];
-    window.__br = { calls: 0, maxB64: 0, bytes: 0, mime: '', aborted: false };
+    window.__br = { calls: 0, opens: 0, maxB64: 0, bytes: 0, mime: '', aborted: false };
     window.AndroidCam = {
-      open(mime) { window.__br.mime = mime; return 1; },
+      open(mime) { window.__br.mime = mime; window.__br.opens++; return 1; },
       write(id, b64) {
         // stand in for the Java-side Base64.decode + FileOutputStream.write: an
         // @JavascriptInterface call does not return until that work is done, so
@@ -285,6 +285,29 @@ const check = (name, ok, detail) => {
     save.src + ' bytes in ' + save.calls + ' calls');
   check('native save hands the bridge small slices', save.maxB64 <= 768 * 1024,
     'largest ' + (save.maxB64 / 1024).toFixed(0) + ' KB base64, longest stall ' + save.stall + ' ms');
+
+  // a second tap while a save is still in flight must not start a second save:
+  // it opened a second bridge session and interleaved its writes into the same
+  // gallery file, doubling it, and fired a second toast
+  const dbl = await p2.evaluate(async n => {
+    const b = new Uint8Array(n);
+    items.push({ t: 'v', u: URL.createObjectURL(new Blob([b], { type: 'video/webm' })), x: 'webm', p: '' });
+    vi = items.length - 1;
+    const before = { opens: window.__br.opens, bytes: window.__br.bytes };
+    const vs = document.querySelector('#vs');
+    vs.click();
+    setTimeout(() => vs.click(), 60);
+    const t0 = performance.now();
+    while (performance.now() - t0 < 8000) {
+      await new Promise(r => setTimeout(r, 50));
+      if (window.__br.opens > before.opens && window.__br.bytes >= before.bytes + n) break;
+    }
+    await new Promise(r => setTimeout(r, 400));
+    return { opens: window.__br.opens - before.opens, wrote: window.__br.bytes - before.bytes, n };
+  }, 2 * 1024 * 1024);
+  check('a second tap during a save does not start a second one',
+    dbl.opens === 1 && dbl.wrote === dbl.n,
+    dbl.opens + ' session(s), ' + dbl.wrote + ' of ' + dbl.n + ' bytes');
 
   // timer: a cancel must stop the countdown at once, and never capture
   const p3 = await browser.newPage();

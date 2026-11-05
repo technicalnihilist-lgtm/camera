@@ -958,9 +958,20 @@ addEventListener('keydown',e=>{if(e.key==='Escape'&&openS)hideSheet()});
 
 /* ---------- native save (Android app) ---------- */
 if(window.AndroidCam){
+  /* The save runs asynchronously — a fetch of the whole clip, then one bridge
+     call per 512 KB slice — so the button stayed live for the second or more it
+     takes to write a long take. A second tap in that window started a whole
+     second save: another `AndroidCam.open()`, and two slice loops interleaving
+     their writes into the stream the app already had open, so the gallery file
+     came out at twice the clip's size with the halves interleaved, and two
+     "Saved to your Gallery" toasts fired. The handler is now guarded: while a
+     save is in flight further taps are ignored, and the flag is released in a
+     `finally` so a failed or aborted save never leaves the button dead. */
+  let saving=false;
   $('#vs').addEventListener('click',async e=>{
     const it=items[vi];e.preventDefault();
-    if(!it||!it.u)return;
+    if(saving||!it||!it.u)return;
+    saving=true;
     let id=0;
     try{
       const res=await fetch(it.u);const bl=await res.blob();
@@ -987,6 +998,7 @@ if(window.AndroidCam){
       const done=window.AndroidCam.close(id);id=0;
       toast(done&&done.indexOf('ok')===0?'Saved to your Gallery':'Could not save ('+done+')');
     }catch(err){if(id){try{window.AndroidCam.abort(id)}catch(_){}}toast('Could not save this item')}
+    finally{saving=false}
   });
 }
 </script>
