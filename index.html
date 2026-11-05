@@ -710,7 +710,22 @@ function stillCanvas(w,h){
   if(stillC.width!==w||stillC.height!==h){stillC.width=w;stillC.height=h}
   return stillC}
 addEventListener('visibilitychange',()=>{if(document.hidden&&stillC){stillC.width=stillC.height=0;stillC=null}});
-const nextFrame=()=>new Promise(r=>v.requestVideoFrameCallback?v.requestVideoFrameCallback(()=>r()):setTimeout(r,40));
+/* The burst's wait between frames only ever ended when the video element
+   presented its next frame. requestVideoFrameCallback never fires for a stream
+   that has stalled — the camera grabbed by another app, a track that muted or
+   ended without an `ended` event, a preview the WebView has stopped presenting
+   — so a shutter tap at that moment left snap() awaiting a frame that was never
+   coming. `busy` then stayed true for the rest of the session: the shutter,
+   flip, zoom, mode, timer and record buttons all answered "Wait for the timer
+   to finish" and nothing was ever captured again until the app was restarted.
+   The wait is now bounded — 120 ms, more than three frame times at 30 fps, so a
+   live preview never reaches it — and the burst carries on with the frame it
+   already holds, which is the same frame the old code would eventually have
+   used. */
+const nextFrame=()=>new Promise(r=>{let done=false,t=0;
+  const fin=()=>{if(done)return;done=true;clearTimeout(t);r()};
+  if(v.requestVideoFrameCallback){t=setTimeout(fin,120);try{v.requestVideoFrameCallback(fin)}catch(e){fin()}}
+  else t=setTimeout(fin,40)});
 async function snap(){
   const fx=$('#fx');killAnims(fx);fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
   spr($('#stage'),{s:.96},{s:1});

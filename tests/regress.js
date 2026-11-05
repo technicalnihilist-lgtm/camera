@@ -504,6 +504,53 @@ const check = (name, ok, detail) => {
     'on the tap ' + zoomFocus.onTap + ', after the 3 s restore ' + zoomFocus.afterRestore);
   await p6.close();
 
+  // The burst waits for the preview's next frame between candidates, and that
+  // wait used to end only when requestVideoFrameCallback fired. A stalled
+  // stream — camera grabbed by another app, a track that muted without an
+  // `ended` event — never presents another frame, so snap() waited for ever,
+  // `busy` stayed true and every control was dead until the app was restarted.
+  // With the callback never firing, a capture must still complete and the next
+  // tap must still capture.
+  const p7 = await browser.newPage();
+  await p7.setViewport({ width: 400, height: 840 });
+  p7.on('pageerror', e => errors.push('pageerror(stall): ' + e.message));
+  p7.on('console', m => { if (m.type() === 'error') errors.push('console(stall): ' + m.text().slice(0, 160)); });
+  await p7.evaluateOnNewDocument(() => {
+    Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', {
+      configurable: true,
+      value() { return 0; },            // a preview that never presents another frame
+    });
+    // no still capture, so the burst off the preview is the path taken
+    Object.defineProperty(window, 'ImageCapture', { configurable: true, value: undefined });
+  });
+  await p7.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  await p7.click('#bE'); await wait(900);
+  await p7.click('#qseg button[data-q="std"]'); await wait(2200);
+  await p7.click('#edone'); await wait(1400);
+  const stalled = await p7.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    const t0 = performance.now();
+    const n0 = items.length;
+    document.querySelector('#shut').click();
+    let took = -1;
+    for (let i = 0; i < 100; i++) {
+      await w(100);
+      if (took < 0 && items.length > n0) took = performance.now() - t0;
+      if (took >= 0 && !busy) break;
+    }
+    const busyAfter = busy;
+    const n1 = items.length;
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 100 && items.length === n1; i++) await w(100);
+    return { took, busy: busyAfter, first: items.length - n0, again: items.length - n1 };
+  });
+  check('a stalled preview cannot lock the shutter',
+    stalled.first >= 1 && stalled.busy === false && stalled.again >= 1,
+    'first capture ' + (stalled.took < 0 ? 'never finished' : Math.round(stalled.took) + ' ms') +
+    ', busy ' + stalled.busy + ', next tap captured ' + stalled.again);
+  await p7.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
