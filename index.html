@@ -408,7 +408,12 @@ function enableTilt(){
   const start=()=>{if(PAR.listening||!PAR.on)return;PAR.listening=true;addEventListener('deviceorientation',onTilt,{passive:true})};
   try{
     if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
-      DeviceOrientationEvent.requestPermission().then(r=>{if(r==='granted')start()}).catch(()=>{});
+      /* Only 'denied' is a refusal. Chromium answers 'prompt' — it has no
+         per-site prompt for the sensor and simply streams once a listener is
+         attached — so requiring 'granted' meant 4D tilt never started there at
+         all. Anything that is not 'denied' subscribes; if the platform really
+         is holding the permission back, no events arrive and nothing is spent. */
+      DeviceOrientationEvent.requestPermission().then(r=>{if(r!=='denied')start()}).catch(()=>{});
     }else if(typeof DeviceOrientationEvent!=='undefined'){start()}
   }catch(e){}
 }

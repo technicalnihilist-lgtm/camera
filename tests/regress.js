@@ -596,6 +596,51 @@ const check = (name, ok, detail) => {
     '4D ' + t3.on + ', listening ' + t3.listening + ', adds ' + t3.add);
   await p8.close();
 
+  // a permission answer that is not 'denied' still subscribes (Chromium: 'prompt')
+  const sensorPage = async answer => {
+    const p = await browser.newPage();
+    await p.setViewport({ width: 400, height: 840 });
+    await p.evaluateOnNewDocument(ans => {
+      window.__do = { add: 0 };
+      const A = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function (t, f, o) {
+        if (t === 'deviceorientation' && this === window) window.__do.add++;
+        return A.call(this, t, f, o);
+      };
+      Object.defineProperty(DeviceOrientationEvent, 'requestPermission',
+        { configurable: true, value: () => Promise.resolve(ans) });
+    }, answer);
+    await p.goto(URL, { waitUntil: 'load' });
+    await wait(2500);
+    return p;
+  };
+  const p9 = await sensorPage('prompt');
+  await p9.mouse.click(200, 420);
+  await wait(400);
+  const t4 = await p9.evaluate(() => {
+    const tilt = { add: __do.add, listening: PAR.listening };
+    const fire = (b, g) => dispatchEvent(new DeviceOrientationEvent('deviceorientation',
+      { alpha: 0, beta: b, gamma: g }));
+    // the fake sensor platform emits its own events; start from a clean base
+    PAR.base = null;
+    fire(30, 10); fire(10, 10);
+    tilt.gyro = PAR.gyro;
+    tilt.ayAfter = PAR.ay;
+    return tilt;
+  });
+  check('a "prompt" permission answer still starts 4D tilt',
+    t4.add === 1 && t4.listening === true && t4.gyro === true && Math.abs(t4.ayAfter - 0.5) < 0.01,
+    'adds ' + t4.add + ', listening ' + t4.listening + ', ay ' + t4.ayAfter.toFixed(2));
+  await p9.close();
+
+  const p10 = await sensorPage('denied');
+  await p10.mouse.click(200, 420);
+  await wait(400);
+  const t5 = await p10.evaluate(() => ({ add: __do.add, listening: PAR.listening }));
+  check('a denied permission does not subscribe the tilt sensor',
+    t5.add === 0 && t5.listening === false, 'adds ' + t5.add + ', listening ' + t5.listening);
+  await p10.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
