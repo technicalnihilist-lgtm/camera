@@ -822,12 +822,30 @@ function posterFrom(c){
     return pScratch.toDataURL('image/jpeg',.72);
   }catch(e){return''}
 }
+/* The recording surface was a brand new canvas per take, sized to the quality
+   preset (up to 3840×2160 at Max, a 33 MB backing store), and it was created on
+   the tap that starts recording — the very moment the shutter has to paint its
+   recording state and the toast. Allocating and first-touching a surface that
+   size is not free (a fresh 4K canvas costs ~100–170 ms here against ~20 ms to
+   draw into one that already exists, the same allocation the still capture path
+   was fixed for), and it was thrown away again when the take ended. One surface
+   is now reused across takes and only resized when the recording size actually
+   changes; draw() paints the first frame into it before captureStream() is
+   attached, so nothing from the previous take can be recorded. It is released
+   when the page is hidden so nothing is pinned while the camera sits in the
+   background — but never during a take, whose stream is attached to it. */
+let pipeC=null;
+function pipeCanvas(w,h){
+  if(!pipeC){try{pipeC=document.createElement('canvas')}catch(e){return null}}
+  if(pipeC.width!==w||pipeC.height!==h){pipeC.width=w;pipeC.height=h}
+  return pipeC}
+addEventListener('visibilitychange',()=>{if(document.hidden&&pipeC&&!rec){pipeC.width=pipeC.height=0;pipeC=null}});
 function makePipe(){
   const r=cropRect();if(!r)return null;
   const scale=Math.min(1,QP[E.q].vmax/Math.max(r.sw,r.sh));
   const w=Math.max(2,Math.round(r.sw*scale)&~1),h=Math.max(2,Math.round(r.sh*scale)&~1);
-  let c;try{c=document.createElement('canvas')}catch(e){return null}
-  c.width=w;c.height=h;const ctx=c.getContext('2d',{alpha:false});
+  const c=pipeCanvas(w,h);if(!c)return null;
+  const ctx=c.getContext('2d',{alpha:false});
   if(!ctx||!c.captureStream)return null;
   let cs;try{cs=c.captureStream(30)}catch(e){return null}
   let live=true,raf=0,last=performance.now();
