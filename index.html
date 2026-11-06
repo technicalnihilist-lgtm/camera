@@ -773,13 +773,24 @@ async function sharpen(c,k){const w=c.width,h=c.height;
    in the background. A surface bigger than STILL_KEEP is not cached at all: a
    48 MP sensor would otherwise pin ~190 MB for the rest of the session. */
 const STILL_KEEP=24e6;
-let stillC=null;
+let stillC=null,capturing=false;
 function stillCanvas(w,h){
   if(w*h>STILL_KEEP){const c=document.createElement('canvas');c.width=w;c.height=h;return c}
   if(!stillC)stillC=document.createElement('canvas');
   if(stillC.width!==w||stillC.height!==h){stillC.width=w;stillC.height=h}
   return stillC}
-addEventListener('visibilitychange',()=>{if(document.hidden&&stillC){stillC.width=stillC.height=0;stillC=null}});
+/* The surface is released when the page is hidden so nothing is pinned while
+   the camera sits in the background — but not while a capture is holding it.
+   snap() draws the shot into this surface and then goes on working on it across
+   several awaits (Detail boost's row bands, the depth pass, the JPEG encode),
+   and pressing Home or switching apps inside that window zeroed the canvas out
+   from under the capture: the picture had already been taken, and it came back
+   as "Could not save the photo" with the shot gone. The capture keeps the
+   surface alive for as long as it is using it and releases it itself if the
+   page is still hidden when it is done, so a hidden page pins it for at most
+   the length of one capture, never for the rest of the session. */
+function dropStill(){if(stillC){stillC.width=stillC.height=0;stillC=null}}
+addEventListener('visibilitychange',()=>{if(document.hidden&&!capturing)dropStill()});
 /* The burst's wait between frames only ever ended when the video element
    presented its next frame. requestVideoFrameCallback never fires for a stream
    that has stalled — the camera grabbed by another app, a track that muted or
@@ -796,7 +807,13 @@ const nextFrame=()=>new Promise(r=>{let done=false,t=0;
   const fin=()=>{if(done)return;done=true;clearTimeout(t);r()};
   if(v.requestVideoFrameCallback){t=setTimeout(fin,120);try{v.requestVideoFrameCallback(fin)}catch(e){fin()}}
   else t=setTimeout(fin,40)});
-async function snap(){
+/* One capture at a time (every entry point sets `busy` before it calls here), so
+   a plain flag is enough to tell the visibility handler above that the still
+   surface is in use. */
+async function snap(){capturing=true;
+  try{await snapShot()}
+  finally{capturing=false;if(document.hidden)dropStill()}}
+async function snapShot(){
   const fx=$('#fx');killAnims(fx);fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
   spr($('#stage'),{s:.96},{s:1});
   if(!v.videoWidth||!v.videoHeight)return toast('Camera is not ready yet');
