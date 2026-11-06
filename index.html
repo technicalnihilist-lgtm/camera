@@ -582,6 +582,35 @@ async function start(){
     if(n==='NotAllowedError'&&!isFramed())return gate('Camera permission was denied. Tap the lock or camera icon in the address bar, allow Camera, then tap the button below.');
     if(n==='NotAllowedError'&&isFramed()&&openable())return gate('Camera permission was refused inside this preview frame. Open the app in its own tab with the button below, then allow the camera.',  'Open in a new tab','open');
     const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).'}[n]||('Camera could not start ('+n+').');gate(m)}}
+/* Nothing ever released the camera when the page was hidden. The Android
+   wrapper keeps the WebView process alive behind the home screen and its
+   activity holds FLAG_KEEP_SCREEN_ON, so pressing Home, switching apps or
+   letting the screen go off left the preview track — and with it the sensor,
+   the ISP pipeline and the system's camera-in-use indicator — running for as
+   long as the app sat in the background, for a preview nobody could see, and
+   it kept the device's camera busy for every other app that wanted it. A
+   camera app is expected to let go of the sensor when it is not on screen, so
+   the tracks are stopped as the page hides and taken up again when it is
+   shown. A recording owns the sensor (and a take cut off that way would be
+   lost), so a hide during a take is left alone. `startId` is bumped so a
+   start() that is still awaiting the device stops the stream it gets instead
+   of attaching it, and `start()` already retries once after releasing a
+   stream the sensor still holds, which is the NotReadableError a re-acquire
+   right after a release can hit. Nothing on screen changes: the preview is
+   faded out while hidden, and `start()` fades it back in on return exactly as
+   it does on the first load. */
+let camPaused=false;
+addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    if(rec)return;
+    startId++;                              /* a start() still in flight is now stale */
+    const s=stream;if(!s)return;
+    camPaused=true;stream=null;torchOn=false;
+    try{s.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}
+    try{v.srcObject=null}catch(e){}
+    v.style.opacity=0;
+  }else if(camPaused){camPaused=false;start()}
+});
 /* ---------- capture engine: tuning, focus, readout ---------- */
 async function tune(s,c){const t=s.getVideoTracks()[0];if(!t)return;
   const za=zoomAdv();

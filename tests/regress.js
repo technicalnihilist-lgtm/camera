@@ -710,6 +710,60 @@ const check = (name, ok, detail) => {
   check('no errors from the scratch surfaces', memErrors.length === 0, memErrors.slice(0, 2).join(' | '));
   await p11.close();
 
+  // A camera app must let go of the sensor when it is not on screen. The
+  // Android wrapper keeps the WebView process alive behind the home screen, so
+  // an un-released preview track leaves the sensor, the ISP and the system's
+  // camera-in-use indicator running for as long as the app sits in the
+  // background. The tracks must be stopped as the page hides, taken up again
+  // when it is shown, and left alone while a take is recording.
+  const p12 = await browser.newPage();
+  await p12.setViewport({ width: 400, height: 840 });
+  const camErrors = [];
+  p12.on('pageerror', e => camErrors.push('pageerror(cam): ' + e.message));
+  p12.on('console', m => { if (m.type() === 'error') camErrors.push('console(cam): ' + m.text().slice(0, 160)); });
+  await p12.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const camBefore = await p12.evaluate(() => ({ live: !!stream, w: v.videoWidth }));
+  const camHidden = await p12.evaluate(async () => {
+    const tr = stream ? stream.getTracks() : [];
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 250));
+    return { n: tr.length, states: tr.map(t => t.readyState), stream: stream === null, src: v.srcObject === null };
+  });
+  check('hiding the page releases the camera',
+    camBefore.live && camBefore.w > 0 && camHidden.n > 0 &&
+    camHidden.states.every(s => s === 'ended') && camHidden.stream && camHidden.src,
+    camHidden.n + ' track(s) ' + camHidden.states.join(',') + ', stream ' + camHidden.stream + ', srcObject null ' + camHidden.src);
+  const camShown = await p12.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    for (let i = 0; i < 40; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (stream && v.videoWidth > 0) break;
+    }
+    return { live: !!stream, w: v.videoWidth, states: stream ? stream.getTracks().map(t => t.readyState) : [] };
+  });
+  check('showing the page takes the camera up again',
+    camShown.live && camShown.w > 0 && camShown.states.every(s => s === 'live'),
+    camShown.w + 'x, tracks ' + camShown.states.join(','));
+  const camRec = await p12.evaluate(async () => {
+    const s = stream; rec = { fake: true };
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 200));
+    const kept = stream === s && s.getTracks().every(t => t.readyState === 'live');
+    rec = null;
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 250));
+    return { kept, live: !!stream };
+  });
+  check('a hide during a take does not stop the recording',
+    camRec.kept && camRec.live, 'stream kept ' + camRec.kept + ', still live ' + camRec.live);
+  check('no errors from the camera lifecycle', camErrors.length === 0, camErrors.slice(0, 2).join(' | '));
+  await p12.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
