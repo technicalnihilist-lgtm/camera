@@ -840,6 +840,14 @@ function posterFrom(c){
     return pScratch.toDataURL('image/jpeg',.72);
   }catch(e){return''}
 }
+/* dScratch (the depth pass) and pScratch (the poster) are module-level surfaces
+   like stillC and pipeC, but unlike them they were never released: a 12 MP
+   frame leaves ~5 MB of RGBA in dScratch and a 1080-long-edge poster ~6 MB in
+   pScratch, both pinned for as long as the WebView stays alive after the page
+   is hidden. Neither is used while the page is hidden, and both re-check their
+   size on every call, so zeroing them frees the backing store and the next
+   depth pass or poster just resizes. */
+addEventListener('visibilitychange',()=>{if(document.hidden){dScratch.width=dScratch.height=0;pScratch.width=pScratch.height=0}});
 /* The recording surface was a brand new canvas per take, sized to the quality
    preset (up to 3840×2160 at Max, a 33 MB backing store), and it was created on
    the tap that starts recording — the very moment the shutter has to paint its

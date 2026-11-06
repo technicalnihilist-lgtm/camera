@@ -664,6 +664,52 @@ const check = (name, ok, detail) => {
     t5.add === 0 && t5.listening === false, 'adds ' + t5.add + ', listening ' + t5.listening);
   await p10.close();
 
+  // The depth pass's scratch surface and the poster's scratch surface are
+  // module-level like stillC and pipeC, but unlike them they were never
+  // released: a 12 MP frame pins a few MB of RGBA in dScratch and a
+  // 1080-long-edge poster a few MB in pScratch for as long as the WebView
+  // lives after the page is hidden. Both must be let go when the page hides
+  // and must still work afterwards.
+  const p11 = await browser.newPage();
+  await p11.setViewport({ width: 400, height: 840 });
+  const memErrors = [];
+  p11.on('pageerror', e => memErrors.push('pageerror(mem): ' + e.message));
+  p11.on('console', m => { if (m.type() === 'error') memErrors.push('console(mem): ' + m.text().slice(0, 160)); });
+  await p11.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const warm = await p11.evaluate(() => {
+    const c = document.createElement('canvas'); c.width = 1440; c.height = 1080;
+    const x = c.getContext('2d'); x.fillStyle = '#345'; x.fillRect(0, 0, 1440, 1080);
+    const uri = posterFrom(c);
+    const d = document.createElement('canvas'); d.width = 640; d.height = 480;
+    depthPass(d.getContext('2d'), d, .8);
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length };
+  });
+  const released = await p11.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 150));
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height };
+  });
+  const healed = await p11.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    const c = document.createElement('canvas'); c.width = 1440; c.height = 1080;
+    const x = c.getContext('2d'); x.fillStyle = '#345'; x.fillRect(0, 0, 1440, 1080);
+    const uri = posterFrom(c);
+    const d = document.createElement('canvas'); d.width = 640; d.height = 480;
+    depthPass(d.getContext('2d'), d, .8);
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length };
+  });
+  check('hiding the page releases the depth and poster scratch surfaces',
+    warm.d > 0 && warm.p > 0 && released.d === 0 && released.p === 0,
+    'dScratch ' + warm.d + ' -> ' + released.d + ' px, pScratch ' + warm.p + ' -> ' + released.p + ' px');
+  check('the depth pass and the poster still work after the page is shown again',
+    healed.d > 0 && healed.p > 0 && healed.uri > 1000,
+    'dScratch ' + healed.d + ' px, pScratch ' + healed.p + ' px, poster ' + healed.uri + ' chars');
+  check('no errors from the scratch surfaces', memErrors.length === 0, memErrors.slice(0, 2).join(' | '));
+  await p11.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
