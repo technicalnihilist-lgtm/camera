@@ -662,12 +662,30 @@ function add(it){items.push(it);
 function renderThumb(){const it=items[items.length-1];
   $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
 const toJpg=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
+/* ImageCapture.takePhoto() is a request to the camera HAL, and its promise
+   settles only when the still actually arrives: a sensor that is busy, wedged
+   or has been grabbed by another app can leave it pending for ever. snap()
+   awaited it without any bound, so the sensor burst — the first thing a Max
+   quality shot does — never finished: `busy` stayed true and the shutter, flip,
+   zoom, mode, timer and record buttons all answered "Wait for the timer to
+   finish" for the rest of the session. Bound the wait, exactly as nextFrame()
+   is bounded: a still that has not arrived in 5 s (many times a 12 MP
+   takePhoto, so a working sensor never reaches it) counts as no still, which is
+   the same answer every other takePhoto failure already gives — the burst falls
+   back to the frames off the live preview and the shot is taken, at preview
+   resolution, instead of not at all. `if(!b)break` in the burst means only the
+   first take can ever pay the wait. */
+const STILL_WAIT=5000;
 async function stillBitmap(){
   if(!ic||torchOn)return null;
-  try{const o={};const pc=photoCaps;
-    if(pc&&pc.imageWidth&&pc.imageHeight){o.imageWidth=pc.imageWidth.max;o.imageHeight=pc.imageHeight.max}
-    const blob=await ic.takePhoto(o);return await createImageBitmap(blob)}
-  catch(e){return null}}
+  const o={},pc=photoCaps;
+  if(pc&&pc.imageWidth&&pc.imageHeight){o.imageWidth=pc.imageWidth.max;o.imageHeight=pc.imageHeight.max}
+  let t=0,blob;
+  try{blob=await Promise.race([ic.takePhoto(o),
+    new Promise((_,no)=>{t=setTimeout(()=>no(new Error('still timeout')),STILL_WAIT)})])}
+  catch(e){return null}
+  finally{clearTimeout(t)}
+  try{return await createImageBitmap(blob)}catch(e){return null}}
 /* one scratch surface and one grey buffer, reused for every candidate frame:
    a 5-frame burst used to allocate five 320-px canvases (~3 MB of RGBA each)
    plus five Float32Arrays per shot, right while the shutter animation runs. */
