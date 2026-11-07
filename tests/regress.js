@@ -891,6 +891,107 @@ const check = (name, ok, detail) => {
     s60.ticks + ' frames, ' + s60.at100 + ' of the way at 100 ms');
   await p15.close();
 
+
+  // The take's microphone request had no bound and it holds the app-wide `busy`
+  // flag, so a permission prompt that was never answered left the promise
+  // pending for ever and every control answered "Wait for the timer to finish"
+  // until the app was restarted. The wait is bounded now, the take falls back to
+  // the silent recording the app already supports, and a stream that arrives
+  // after the bound is stopped so the microphone is never left open.
+  const p16 = await browser.newPage();
+  await p16.setViewport({ width: 400, height: 840 });
+  const micErrors = [];
+  p16.on('pageerror', e => micErrors.push('pageerror(mic): ' + e.message));
+  p16.on('console', m => { if (m.type() === 'error') micErrors.push('console(mic): ' + m.text().slice(0, 160)); });
+  await p16.evaluateOnNewDocument(() => {
+    window.__lateStopped = 0; window.__micAsks = 0; window.__resolvers = [];
+    const orig = MediaDevices.prototype.getUserMedia;
+    MediaDevices.prototype.getUserMedia = function (c) {
+      if (c && c.audio && !c.video) {
+        // a microphone that is granted but never opens: the promise is held open
+        window.__micAsks++;
+        return new Promise(ok => window.__resolvers.push(() => ok({
+          getTracks: () => [{ stop() { window.__lateStopped++; } }],
+          getAudioTracks: () => [],
+        })));
+      }
+      return orig.call(this, c);
+    };
+    navigator.permissions.query = () => Promise.resolve({ state: 'granted' });
+  });
+  await p16.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const micWait = await p16.evaluate(async () => {
+    const t0 = performance.now(); let threw = false;
+    try { await micStream(); } catch (e) { threw = true; }
+    return { ms: Math.round(performance.now() - t0), threw, asks: window.__micAsks };
+  });
+  check('a granted microphone that never opens is given up on',
+    micWait.threw && micWait.asks === 1 && micWait.ms >= 4500 && micWait.ms <= 7000,
+    'waited ' + micWait.ms + ' ms, ' + micWait.asks + ' request(s)');
+  const wedgedMic = await p16.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('.modes button[data-m="video"]').click();
+    await w(300);
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 200; i++) { await w(100); if (rec) break; }
+    const started = !!rec, locked = busy, mic = !!micS;
+    const asked = window.__resolvers.length;
+    window.__resolvers.splice(0).forEach(f => f());   // the dialog is answered after the fact
+    await w(400);
+    return { started, locked, mic, asked, late: window.__lateStopped };
+  });
+  check('an unanswered mic prompt cannot lock the shutter for the session',
+    wedgedMic.started && wedgedMic.locked === false && wedgedMic.mic === false,
+    'take started ' + wedgedMic.started + ', busy ' + wedgedMic.locked + ', mic ' + wedgedMic.mic);
+  check('a mic stream that arrives after the bound is stopped on arrival',
+    wedgedMic.asked >= 1 && wedgedMic.late === wedgedMic.asked,
+    wedgedMic.asked + ' late stream(s), ' + wedgedMic.late + ' stopped');
+  const micTake = await p16.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('#shut').click();      // stop the take
+    for (let i = 0; i < 40 && rec; i++) await w(100);
+    await w(400);
+    const it = items[items.length - 1] || {};
+    return { rec: !!rec, busy, kind: it.t || '', n: items.length };
+  });
+  check('the take started without a microphone still records a clip',
+    micTake.rec === false && micTake.busy === false && micTake.kind === 'v' && micTake.n >= 1,
+    'rec ' + micTake.rec + ', busy ' + micTake.busy + ', item ' + micTake.kind);
+  check('no errors from the wedged microphone', micErrors.length === 0, micErrors.slice(0, 2).join(' | '));
+  await p16.close();
+
+  // A microphone the user has already refused is answered from the permission
+  // state instead of by a request that can only be rejected.
+  const p17 = await browser.newPage();
+  await p17.setViewport({ width: 400, height: 840 });
+  await p17.evaluateOnNewDocument(() => {
+    window.__micAsks = 0;
+    const orig = MediaDevices.prototype.getUserMedia;
+    MediaDevices.prototype.getUserMedia = function (c) {
+      if (c && c.audio && !c.video) { window.__micAsks++; return Promise.reject(Object.assign(new Error('denied'), { name: 'NotAllowedError' })); }
+      return orig.call(this, c);
+    };
+    navigator.permissions.query = () => Promise.resolve({ state: 'denied' });
+  });
+  await p17.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const deniedMic = await p17.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    const t0 = performance.now(); let threw = false;
+    try { await micStream(); } catch (e) { threw = true; }
+    const ms = Math.round(performance.now() - t0);
+    document.querySelector('.modes button[data-m="video"]').click();
+    await w(300);
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 200; i++) { await w(100); if (rec) break; }
+    return { ms, threw, asks: window.__micAsks, started: !!rec, locked: busy };
+  });
+  check('a refused microphone is answered without asking for it',
+    deniedMic.threw && deniedMic.ms < 300 && deniedMic.asks === 0 && deniedMic.started && deniedMic.locked === false,
+    'refused in ' + deniedMic.ms + ' ms, ' + deniedMic.asks + ' request(s), take started ' + deniedMic.started);
+  await p17.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

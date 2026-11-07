@@ -1003,6 +1003,38 @@ function stopRec(){const rr=rec;if(!rr)return;
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
   try{rr.stop()}catch(e){finishRec(rr)}}
 
+/* The take's microphone request is the one await in the recording path with no
+   natural end, and the only one that holds the whole app. `busy` is set before
+   the countdown and the mic is asked for inside the same try/finally, so the
+   flag is released only once getUserMedia settles. A permission prompt that is
+   never answered — dismissed by clicking beside it on a desktop browser, or a
+   WebView whose permission request is dropped when its activity is torn down —
+   leaves that promise pending for ever: `busy` stays true and the shutter,
+   flip, zoom, mode, timer and record buttons all answer "Wait for the timer to
+   finish" until the app is restarted. This is the same lock the takePhoto wait
+   and the burst's frame wait were bounded for. The wait is bounded now, and how
+   long it is depends on what the browser says about the permission: a granted
+   microphone that has not opened in 5 s is a wedged audio HAL, while a prompt
+   on screen is a person being asked — that one gets 20 s, so the bound only
+   changes the outcome for a dialog nobody ever answered. A denied microphone is
+   answered here instead of by a rejection round trip, and a stream that arrives
+   after the bound has fired is stopped on arrival, so giving up can never leave
+   the microphone open. What the take falls back to is the state the app already
+   has for a missing mic: it records without sound. */
+const MIC_WAIT=5000,MIC_ASK_WAIT=20000;
+const stopTracks=s=>{try{s.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}};
+function micState(){try{
+    const q=navigator.permissions&&navigator.permissions.query({name:'microphone'});
+    if(q&&q.then)return q.then(s=>(s&&s.state)||'',()=>'');
+  }catch(e){}
+  return Promise.resolve('')}
+async function micStream(){
+  const st=await micState();
+  if(st==='denied')throw Object.assign(new Error('microphone denied'),{name:'NotAllowedError'});
+  const p=gum({audio:true});let t=0;
+  return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>{p.then(stopTracks,()=>{});no(new Error('mic timeout'))},st==='granted'?MIC_WAIT:MIC_ASK_WAIT)})])
+    .then(s=>{clearTimeout(t);return s},e=>{clearTimeout(t);throw e})}
+
 async function toggleRec(){
   if(rec){stopRec();return}
   if(busy)return cancelCd();
@@ -1012,7 +1044,7 @@ async function toggleRec(){
   try{
     if(S.tm&&!(await countdown()))return;
     let audioTracks=[];
-    try{micS=await gum({audio:true});audioTracks=micS.getAudioTracks()}catch(e){micS=null}
+    try{micS=await micStream();audioTracks=micS.getAudioTracks()}catch(e){micS=null}
     const noMic=!audioTracks.length;
     if(!stream||!v.videoWidth){micS&&micS.getTracks().forEach(t=>t.stop());micS=null;return toast('Camera is not ready yet')}
     pipe=makePipe();
