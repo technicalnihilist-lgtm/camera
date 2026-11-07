@@ -810,6 +810,40 @@ const check = (name, ok, detail) => {
   check('no errors from the slow-start camera', slowErrors.length === 0, slowErrors.slice(0, 2).join(' | '));
   await p13.close();
 
+  // `prefers-reduced-motion: reduce` turns 4D parallax off before the first
+  // frame, but the switches were placed by hand at the sites that set the flag
+  // and the boot default was not one of them: the sheet showed "4D tilt
+  // parallax" switched on over a page with no parallax at all, so the feature
+  // looked broken until the already-on switch was tapped. The setters place the
+  // switch from the state in effect now.
+  const p14 = await browser.newPage();
+  await p14.setViewport({ width: 400, height: 840 });
+  await p14.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  // a first run: no saved preference to restore over the reduced-motion default
+  await p14.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch (e) {} });
+  await p14.goto(URL, { waitUntil: 'load' });
+  await wait(1200);
+  const rmBoot = await p14.evaluate(() => ({
+    sw: document.querySelector('#t4d .sw').classList.contains('on'),
+    par: document.querySelector('#app').classList.contains('par'),
+    on: PAR.on,
+  }));
+  check('the 4D switch shows the state in effect under reduced motion',
+    rmBoot.sw === false && rmBoot.par === false && rmBoot.on === false,
+    'switch on ' + rmBoot.sw + ', par class ' + rmBoot.par + ', PAR.on ' + rmBoot.on);
+  const rmTap = await p14.evaluate(async () => {
+    document.querySelector('#t4d').click();
+    await new Promise(k => setTimeout(k, 300));
+    return {
+      sw: document.querySelector('#t4d .sw').classList.contains('on'),
+      par: document.querySelector('#app').classList.contains('par'),
+    };
+  });
+  check('one tap on it turns 4D on, switch and page agreeing',
+    rmTap.sw === true && rmTap.par === true,
+    'switch on ' + rmTap.sw + ', par class ' + rmTap.par);
+  await p14.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

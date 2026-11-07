@@ -426,8 +426,20 @@ addEventListener('pointermove',e=>{
   parKick();
 },{passive:true});
 let parTouch=false;
+/* The 4D and depth switches were placed by hand at every call site that set the
+   flag — loadCfg() and the two toggles — and the one site that forgot was the
+   boot default: `prefers-reduced-motion: reduce` turns parallax off before the
+   first frame, but `#t4d .sw` kept the `on` class it is authored with, so the
+   sheet showed "4D tilt parallax" switched on over a page with no `par` class,
+   no tilt subscription and no parallax at all — the feature looked broken until
+   the user tapped the already-on switch, which turned it on for real. The
+   setters are the single point where the flag becomes state, so they place the
+   switch too: a boot default, a restored preference and a tap all end up
+   showing the state that is actually in effect. On a device without the
+   reduced-motion preference nothing changes — D.par and D.depth already agreed
+   with their switches. */
 function applyPar(){
-  PAR.on=D.par;app.classList.toggle('par',D.par);
+  PAR.on=D.par;app.classList.toggle('par',D.par);$('#t4d .sw').classList.toggle('on',D.par);
   if(!D.par){PAR.ax=PAR.ay=PAR.tx=PAR.ty=0;parReset();if(PAR.raf){cancelAnimationFrame(PAR.raf);PAR.raf=0}disableTilt()}
   else{if(parTouch)enableTilt();parKick()}
 }
@@ -473,6 +485,7 @@ function depthPass(ctx,canvas,k){
 function applyDepth(){
   D.depth=!!D.depth;
   app.classList.toggle('depth',D.depth);
+  $('#eDepth .sw').classList.toggle('on',D.depth);
 }
 
 $('#eDepth').onclick=()=>{D.depth=!D.depth;$('#eDepth .sw').classList.toggle('on',D.depth);applyDepth();saveCfg();toast(D.depth?'Depth effect on — background softens':'Depth effect off')};
