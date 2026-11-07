@@ -844,6 +844,53 @@ const check = (name, ok, detail) => {
     'switch on ' + rmTap.sw + ', par class ' + rmTap.par);
   await p14.close();
 
+  // The parallax smoothing was a flat 0.14 per frame, so how long a tilt took
+  // to settle was set by the display's refresh rate rather than by time: the
+  // same 20 frames is 333 ms at 60 Hz and 167 ms at 120 Hz, so on a 120 Hz
+  // phone the layers snapped to the tilt in half the time they were tuned for.
+  // The step is scaled by the frame's own interval now, normalised to a 60 Hz
+  // frame, so every rate settles in the same wall-clock time and a 60 Hz
+  // cadence steps by exactly 0.14 as before. Drive the loop from a virtual
+  // animation clock so a refresh rate can be simulated exactly.
+  const p15 = await browser.newPage();
+  await p15.setViewport({ width: 400, height: 840 });
+  await p15.evaluateOnNewDocument(() => {
+    let id = 0; const q = new Map();
+    window.__now = 0;
+    window.requestAnimationFrame = cb => { q.set(++id, cb); return id; };
+    window.cancelAnimationFrame = i => { q.delete(i); };
+    window.__drop = () => q.clear();
+    window.__tick = dt => {
+      window.__now += dt;
+      const due = [...q.entries()]; q.clear();
+      for (const [, cb] of due) { try { cb(window.__now); } catch (e) {} }
+    };
+  });
+  await p15.goto(URL, { waitUntil: 'load' });
+  await wait(1200);
+  const settle = rate => p15.evaluate(dt => {
+    window.__drop(); PAR.raf = 0; PAR.tx = PAR.ty = 0;
+    PAR.ax = 0; PAR.ay = -1; PAR.k = 1;
+    parKick();
+    const trace = [];
+    for (let n = 0; n < 300; n++) {
+      window.__tick(dt);
+      trace.push(Math.abs(PAR.ty));
+      if (Math.abs(Math.abs(PAR.ty) - 1) < 0.05) break;
+    }
+    return { ticks: trace.length, ms: Math.round(trace.length * dt),
+      at100: +(trace[Math.round(100 / dt) - 1] || 0).toFixed(3) };
+  }, rate);
+  const s60 = await settle(1000 / 60);
+  const s120 = await settle(1000 / 120);
+  check('4D parallax settles in the same time at 60 Hz and 120 Hz',
+    Math.abs(s120.ms - s60.ms) <= 25 && Math.abs(s120.at100 - s60.at100) <= 0.05,
+    '60 Hz ' + s60.ticks + ' frames / ' + s60.ms + ' ms, 120 Hz ' + s120.ticks + ' frames / ' + s120.ms +
+    ' ms, ' + s60.at100 + ' vs ' + s120.at100 + ' of the way at 100 ms');
+  check('the 60 Hz parallax curve is unchanged', s60.ticks === 20 && Math.abs(s60.at100 - 0.595) <= 0.02,
+    s60.ticks + ' frames, ' + s60.at100 + ' of the way at 100 ms');
+  await p15.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
