@@ -764,6 +764,52 @@ const check = (name, ok, detail) => {
   check('no errors from the camera lifecycle', camErrors.length === 0, camErrors.slice(0, 2).join(' | '));
   await p12.close();
 
+  // A start() that is still waiting for the device when the page hides must not
+  // leave the app without a camera on return. The hide makes that start stale —
+  // it stops the stream it is given and attaches nothing — and the handler only
+  // remembered to take the camera up again when there was already a stream, so
+  // the app came back to a black preview with no camera and no message and
+  // stayed that way until the camera was flipped or the app restarted.
+  const p13 = await browser.newPage();
+  await p13.setViewport({ width: 400, height: 840 });
+  const slowErrors = [];
+  p13.on('pageerror', e => slowErrors.push('pageerror(slow): ' + e.message));
+  p13.on('console', m => { if (m.type() === 'error') slowErrors.push('console(slow): ' + m.text().slice(0, 160)); });
+  await p13.evaluateOnNewDocument(() => {
+    const orig = MediaDevices.prototype.getUserMedia;
+    MediaDevices.prototype.getUserMedia = function (c) {
+      return new Promise((ok, no) => setTimeout(() => {
+        try { orig.call(this, c).then(ok, no); } catch (e) { no(e); }
+      }, 900));
+    };
+  });
+  await p13.goto(URL, { waitUntil: 'load' });
+  await wait(200);
+  const slowPending = await p13.evaluate(() => typeof startPending !== 'undefined' && !!startPending && !stream);
+  const slowHide = await p13.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 1200));
+    return { stream: !!stream, paused: camPaused };
+  });
+  const slowShow = await p13.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    for (let i = 0; i < 40; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (stream && v.videoWidth > 0) break;
+    }
+    await new Promise(k => setTimeout(k, 800));
+    return { live: !!stream, w: v.videoWidth, op: +getComputedStyle(v).opacity, gate: document.querySelector('#gate').hidden };
+  });
+  check('a hide while the camera is still starting does not leave the app without one',
+    slowPending && slowHide.stream === false && slowHide.paused === true &&
+    slowShow.live && slowShow.w > 0 && slowShow.op > 0.9 && slowShow.gate === true,
+    'pending ' + slowPending + ', on hide stream ' + slowHide.stream + ' paused ' + slowHide.paused +
+    ', on return ' + slowShow.w + 'px, opacity ' + slowShow.op + ', gate hidden ' + slowShow.gate);
+  check('no errors from the slow-start camera', slowErrors.length === 0, slowErrors.slice(0, 2).join(' | '));
+  await p13.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

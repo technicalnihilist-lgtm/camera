@@ -547,7 +547,7 @@ function openTop(){const u=location.href;let w=null;
   if(w)return toast('Opened in a new tab — allow the camera there');
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(()=>toast('Link copied — paste it into a new tab')).catch(()=>toast('Open this page in a new tab'));
   else toast('Open this page in a new tab')}
-let startId=0,ic=null,photoCaps=null;
+let startId=0,ic=null,photoCaps=null,startPending=0;
 async function start(){
   if(rec)return;
   const id=++startId;
@@ -563,6 +563,7 @@ async function start(){
   const releaseOld=()=>{if(old&&old.getTracks)try{old.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}};
   if(!hasGum()){releaseOld();const s=secInfo();return gate(s.msg,s.label,s.action)}
   const ask=()=>{const P=QP[E.q];return gum({video:{facingMode:{ideal:S.face},width:{ideal:P.w},height:{ideal:P.h},frameRate:{ideal:30}},audio:false})};
+  startPending=id;                          /* the device has not answered yet */
   try{let s;
     try{s=await ask()}catch(e){const n=e&&e.name;
       if(old&&(n==='NotReadableError'||n==='AbortError'||n==='TrackStartError')){releaseOld();s=await ask()}else throw e}
@@ -581,7 +582,8 @@ async function start(){
     if(n==='SecurityError'||n==='NotSupportedError'){const s=secInfo();return gate(s.msg,s.label,s.action)}
     if(n==='NotAllowedError'&&!isFramed())return gate('Camera permission was denied. Tap the lock or camera icon in the address bar, allow Camera, then tap the button below.');
     if(n==='NotAllowedError'&&isFramed()&&openable())return gate('Camera permission was refused inside this preview frame. Open the app in its own tab with the button below, then allow the camera.',  'Open in a new tab','open');
-    const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).'}[n]||('Camera could not start ('+n+').');gate(m)}}
+    const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).'}[n]||('Camera could not start ('+n+').');gate(m)}
+  finally{if(startPending===id)startPending=0}}
 /* Nothing ever released the camera when the page was hidden. The Android
    wrapper keeps the WebView process alive behind the home screen and its
    activity holds FLAG_KEEP_SCREEN_ON, so pressing Home, switching apps or
@@ -604,7 +606,14 @@ addEventListener('visibilitychange',()=>{
   if(document.hidden){
     if(rec)return;
     startId++;                              /* a start() still in flight is now stale */
-    const s=stream;if(!s)return;
+    const s=stream;
+    /* No stream yet means the device has not answered a start() at all: there
+       is nothing to release, but the page still owes the camera a fresh take
+       on return, because the hide has just made that start() stale — it stops
+       the stream it is given and attaches nothing, so without this the app
+       came back to a black preview with no camera and no message, and stayed
+       that way until the camera was flipped or the app restarted. */
+    if(!s){camPaused=!!startPending;return}
     camPaused=true;stream=null;torchOn=false;
     try{s.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}
     try{v.srcObject=null}catch(e){}
