@@ -1048,6 +1048,53 @@ const check = (name, ok, detail) => {
     wedged.after + ' photo(s) after the timeout');
   await p18.close();
 
+  // A camera that advertises `zoom` and then does not move when asked. The
+  // zoom goes out as an `advanced` constraint set, which the spec says a UA
+  // skips rather than rejects when it cannot satisfy it, so applyConstraints()
+  // resolves with the track still at 1x: the zoom row showed the tapped level
+  // and the preview and the capture both stayed unzoomed, silently. The zoom is
+  // read back off getSettings() now and the digital zoom the app already has
+  // takes over, so the tap zooms either way.
+  const p19 = await browser.newPage();
+  await p19.setViewport({ width: 400, height: 840 });
+  p19.on('pageerror', e => errors.push('pageerror(zoomskip): ' + e.message));
+  p19.on('console', m => { if (m.type() === 'error') errors.push('console(zoomskip): ' + m.text().slice(0, 160)); });
+  await p19.evaluateOnNewDocument(() => {
+    const P = MediaStreamTrack.prototype;
+    const caps = P.getCapabilities, get = P.getSettings, apply = P.applyConstraints;
+    P.getCapabilities = function () {
+      let c = {};
+      try { c = caps.apply(this, arguments) || {}; } catch (e) {}
+      return Object.assign({}, c, { zoom: { min: 1, max: 3, step: 0.1 } });
+    };
+    P.getSettings = function () {
+      let s = {};
+      try { s = get.apply(this, arguments) || {}; } catch (e) {}
+      return Object.assign({}, s, { zoom: 1 });      // reports 1x, whatever is asked
+    };
+    P.applyConstraints = function (cs) {
+      const only = cs && Array.isArray(cs.advanced) && cs.advanced.every(a => a && a.zoom !== undefined);
+      if (only) return Promise.resolve();            // the set is skipped, not applied
+      return apply.apply(this, arguments);
+    };
+  });
+  await p19.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const zoomSkip = await p19.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('.zoom button[data-z="2"]').click();
+    await w(700);
+    const r2 = cropRect();
+    const keep = S.dz; S.dz = 1; const r1 = cropRect(); S.dz = keep;
+    return { z: S.z, dz: S.dz, scale: document.querySelector('#v').style.transform,
+      ratio: r1.sw / r2.sw };
+  });
+  check('a camera that ignores the zoom falls back to the digital zoom',
+    zoomSkip.dz === 2 && /scale\(2/.test(zoomSkip.scale) && Math.abs(zoomSkip.ratio - 2) < 0.05,
+    'S.dz ' + zoomSkip.dz + ', preview ' + zoomSkip.scale +
+    ', capture crop ' + zoomSkip.ratio.toFixed(2) + 'x narrower');
+  await p19.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

@@ -538,8 +538,29 @@ $$('.modes button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Sto
 /* ---------- camera ---------- */
 const track=()=>stream&&stream.getVideoTracks()[0];
 function vt(){v.style.transform=`scale(${(S.face==='user'?-1:1)*S.dz},${S.dz})`}
+/* A camera can advertise `zoom` and still not move. The zoom is sent as an
+   `advanced` constraint set, and the spec says a set the UA cannot satisfy is
+   skipped rather than rejected — applyConstraints() resolves, nothing changes,
+   and the row shows the tapped level while the preview and the capture both
+   stay at 1× with nothing said about it: the same silent divergence the
+   constraint-set fix below is about, from the other side. Read the zoom back
+   off the track once the call settles, and only when the camera reports a zoom
+   that did not move, fall back to the digital zoom this app already has so the
+   tap always zooms. A camera that applies the zoom without reporting it in
+   getSettings() reports no `zoom` at all and is left alone, a value within the
+   camera's own step counts as applied, and `dig()` drops out if the track was
+   replaced or a newer tap already set a digital zoom, so a late readback can
+   never undo a newer one. A rejected apply is a refusal the caller already
+   treats as "no hardware zoom" and keeps its own path. */
 function applyZoom(){const t=track(),c=(t&&t.getCapabilities&&t.getCapabilities())||{};
-  if(c.zoom){const z=Math.min(c.zoom.max,Math.max(c.zoom.min,S.z));t.applyConstraints({advanced:[{zoom:z}]}).catch(()=>{});S.dz=1}else S.dz=S.z;vt()}
+  if(c.zoom){const z=Math.min(c.zoom.max,Math.max(c.zoom.min,S.z));S.dz=1;vt();
+    const dig=()=>{if(!t||track()!==t||S.dz!==1)return;S.dz=S.z;vt()};
+    t.applyConstraints({advanced:[{zoom:z}]}).then(()=>{
+      if(track()!==t)return;
+      let st;try{st=t.getSettings&&t.getSettings()}catch(e){st=null}
+      if(!st||st.zoom==null)return;
+      if(Math.abs(st.zoom-z)>Math.max(.01,(c.zoom.step||0)/2))dig()}).catch(()=>{})
+  }else{S.dz=S.z;vt()}}
 /* applyConstraints() replaces the track's whole constraint set, so every
    constraint set this app wrote after applyZoom() — the resolution bump and the
    focus/exposure/white-balance pass in tune(), the single-shot focus a tap on
