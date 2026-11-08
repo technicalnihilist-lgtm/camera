@@ -1128,6 +1128,27 @@ function renderView(){const it=items[vi];if(!it)return;
 $('#thumb').onclick=()=>{if(!items.length)return toast('Nothing captured yet');vi=items.length-1;renderView();showSheet($('#view'))};
 $('#vp').onclick=()=>{if(vi>0){vi--;renderView();spr($('#vm'),{s:.9},{s:1})}};
 $('#vn').onclick=()=>{if(vi<items.length-1){vi++;renderView();spr($('#vm'),{s:.9},{s:1})}};
+/* The app lets go of the camera, of its audio context and of every scratch
+   surface when the page is hidden, but not of the clip the viewer is playing.
+   A recorded take carries sound, so backgrounding the app left the clip's audio
+   playing — and its decoder allocated — behind the home screen, for a page
+   nobody can see: the same cost the audio-context suspend was fixed for, and
+   the Android wrapper never pauses its WebView, so nothing else stops it. The
+   clip is paused as the page hides and picked up again as the page is shown, so
+   it sits exactly where it was left and nothing is decoded or played off
+   screen. Only a clip this handler paused is resumed, so one the user paused
+   himself stays paused, and a clip whose element was replaced or whose viewer
+   was closed in the meantime is left alone. */
+let viewPaused=null;
+addEventListener('visibilitychange',()=>{
+  if(document.hidden){
+    const m=$('#vm').querySelector('video');
+    if(m&&!m.paused){viewPaused=m;try{m.pause()}catch(e){}}
+  }else if(viewPaused){
+    const m=viewPaused;viewPaused=null;
+    if(m.isConnected){const p=m.play();if(p&&p.catch)p.catch(()=>{})}
+  }
+});
 
 /* ---------- opening animation ---------- */
 function intro(){const st=$('#stage');spr(st,{s:.6,o:0},{s:1,o:1},{k:3});requestAnimationFrame(()=>requestAnimationFrame(()=>st.classList.add('open')));
