@@ -992,6 +992,47 @@ const check = (name, ok, detail) => {
     'refused in ' + deniedMic.ms + ' ms, ' + deniedMic.asks + ' request(s), take started ' + deniedMic.started);
   await p17.close();
 
+  // The three image decode/encode waits on the capture path (the still's JPEG
+  // decode, each preview frame's grab, the shot's JPEG encode) used to be the
+  // only awaits between a shutter tap and a saved photo that no event ever
+  // ends. A wedged encoder left that promise pending for ever, so `busy` never
+  // came off and every control answered "Wait for the timer to finish" until
+  // the app was restarted. Wedge the encode and check the shutter comes back.
+  const p18 = await browser.newPage();
+  await p18.setViewport({ width: 400, height: 840 });
+  p18.on('pageerror', e => errors.push('pageerror(encode): ' + e.message));
+  p18.on('console', m => { if (m.type() === 'error') errors.push('console(encode): ' + m.text().slice(0, 160)); });
+  await p18.evaluateOnNewDocument(() => {
+    const real = HTMLCanvasElement.prototype.toBlob;
+    window.__wedged = false;
+    HTMLCanvasElement.prototype.toBlob = function (cb, ...a) {
+      if (window.__wedged) return;            // the encode never calls back
+      return real.call(this, cb, ...a);
+    };
+  });
+  await p18.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const wedged = await p18.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    E.q = 'std'; E.burst = false;              // a quick shot; the encode is what hangs
+    window.__wedged = true;
+    document.querySelector('#shut').click();
+    const t0 = performance.now(); let ms = -1;
+    for (let i = 0; i < 400; i++) { await w(50); if (!busy) { ms = Math.round(performance.now() - t0); break; } }
+    const lost = items.length;
+    window.__wedged = false;                   // and the shutter must still work
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 100; i++) { await w(100); if (!busy && items.length > lost) break; }
+    return { ms, lost, after: items.length, locked: busy };
+  });
+  check('a wedged JPEG encode does not lock the shutter',
+    wedged.ms >= 0 && wedged.ms < 16000 && wedged.locked === false && wedged.lost === 0,
+    'unlocked after ' + wedged.ms + ' ms, ' + wedged.lost + ' photo(s) written');
+  check('the shutter still captures after the encode gave up',
+    wedged.after >= 1,
+    wedged.after + ' photo(s) after the timeout');
+  await p18.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

@@ -729,7 +729,7 @@ function add(it){items.push(it);
   renderThumb();spr($('#thumb'),{s:.5},{s:1})}
 function renderThumb(){const it=items[items.length-1];
   $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
-const toJpg=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
+const toJpg=(c,q)=>imgWait(new Promise(r=>c.toBlob(r,'image/jpeg',q)),IMG_ENCODE_WAIT);
 /* ImageCapture.takePhoto() is a request to the camera HAL, and its promise
    settles only when the still actually arrives: a sensor that is busy, wedged
    or has been grabbed by another app can leave it pending for ever. snap()
@@ -744,6 +744,27 @@ const toJpg=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
    resolution, instead of not at all. `if(!b)break` in the burst means only the
    first take can ever pay the wait. */
 const STILL_WAIT=5000;
+/* The three waits that turn bytes into pixels — the still's JPEG decode, each
+   preview frame's grab, and the shot's own JPEG encode — were the only awaits
+   left between a shutter tap and a saved photo with no natural end, and all
+   three hold `busy`. takePhoto, the frame wait and the microphone were bounded
+   for exactly this reason; a wedged image decoder or encoder (an OOM at 48 MP, a
+   WebView whose image thread has died under memory pressure) leaves the promise
+   pending for ever, and then the shutter, flip, zoom, mode, timer and record
+   buttons all answer "Wait for the timer to finish" until the app is restarted —
+   the same lock the other three waits were fixed for. The bounds are generous
+   enough that a working pipeline never reaches them: a 12 MP JPEG encodes in
+   0.58 s here (2.1 s on a 4×-slower CPU) and decodes in 0.38 s, and the largest
+   capture this app allows is capped at 64 MP, so the encode gets 12 s and a
+   decode 8 s. A decode that runs out is the same "no still" answer every
+   takePhoto failure already gives — the burst falls back to the preview frames,
+   or to the frame the video element is holding — and an encode that runs out
+   takes the "Could not save the photo" path a null blob already takes. A
+   capture that completes is untouched: the timer is set and cleared around it. */
+const IMG_DECODE_WAIT=8000,IMG_ENCODE_WAIT=12000;
+function imgWait(p,ms){let t=0;
+  return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>no(new Error('image timeout')),ms)})])
+    .then(v=>{clearTimeout(t);return v},e=>{clearTimeout(t);throw e})}
 async function stillBitmap(){
   if(!ic||torchOn)return null;
   const o={},pc=photoCaps;
@@ -753,7 +774,7 @@ async function stillBitmap(){
     new Promise((_,no)=>{t=setTimeout(()=>no(new Error('still timeout')),STILL_WAIT)})])}
   catch(e){return null}
   finally{clearTimeout(t)}
-  try{return await createImageBitmap(blob)}catch(e){return null}}
+  try{return await imgWait(createImageBitmap(blob),IMG_DECODE_WAIT)}catch(e){return null}}
 /* one scratch surface and one grey buffer, reused for every candidate frame:
    a 5-frame burst used to allocate five 320-px canvases (~3 MB of RGBA each)
    plus five Float32Arrays per shot, right while the shutter animation runs. */
@@ -865,7 +886,7 @@ async function snapShot(){
       if(b.width<v.videoWidth*.9&&b.height<v.videoHeight*.9){if(b.close)b.close();break}
       nat=true;consider(b)}}
   if(!best){got=0;
-    for(let i=0;i<n;i++){let b=null;try{b=await createImageBitmap(v)}catch(e){}if(!b)break;consider(b);if(i<n-1)await nextFrame()}}
+    for(let i=0;i<n;i++){let b=null;try{b=await imgWait(createImageBitmap(v),IMG_DECODE_WAIT)}catch(e){}if(!b)break;consider(b);if(i<n-1)await nextFrame()}}
   let src=best||v,W=best?best.width:v.videoWidth,H=best?best.height:v.videoHeight;
   const r=cropFor(W,H);if(!r){if(best&&best.close)best.close();return toast('Camera is not ready yet')}
   let w=Math.round(r.sw),h=Math.round(r.sh);
@@ -877,7 +898,7 @@ async function snapShot(){
   let boosted=false;
   if(E.sharp&&!nat&&w*h<=12e6){await sleep(0);try{await sharpen(c,.4);boosted=true}catch(e){}}
   if(D.depth){try{await sleep(0);depthPass(c.getContext('2d'),c,D.k)}catch(e){}}
-  const b=await toJpg(c,QP[E.q].jpg);
+  const b=await toJpg(c,QP[E.q].jpg).catch(()=>null);
   if(!b)return toast('Could not save the photo');
   add({t:'i',u:URL.createObjectURL(b),x:'jpg'});
   toast('Saved '+w+' × '+h+' · '+(w*h/1e6).toFixed(1)+' MP'+(nat?' · sensor':'')+(got>1?' · best of '+got:'')+(boosted?' · enhanced':''))}
