@@ -683,13 +683,16 @@ const check = (name, ok, detail) => {
     const uri = posterFrom(c);
     const d = document.createElement('canvas'); d.width = 640; d.height = 480;
     depthPass(d.getContext('2d'), d, .8);
-    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length };
+    sharpScore(c, 0, 0, 1440, 1080);
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length,
+      s: sScratch.width * sScratch.height, gray: !!sGray };
   });
   const released = await p11.evaluate(async () => {
     Object.defineProperty(document, 'hidden', { value: true, configurable: true });
     window.dispatchEvent(new Event('visibilitychange'));
     await new Promise(k => setTimeout(k, 150));
-    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height };
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height,
+      s: sScratch.width * sScratch.height, gray: !!sGray };
   });
   const healed = await p11.evaluate(async () => {
     Object.defineProperty(document, 'hidden', { value: false, configurable: true });
@@ -699,7 +702,9 @@ const check = (name, ok, detail) => {
     const uri = posterFrom(c);
     const d = document.createElement('canvas'); d.width = 640; d.height = 480;
     depthPass(d.getContext('2d'), d, .8);
-    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length };
+    const sc = sharpScore(c, 0, 0, 1440, 1080);
+    return { d: dScratch.width * dScratch.height, p: pScratch.width * pScratch.height, uri: uri.length,
+      s: sScratch.width * sScratch.height, gray: !!sGray, sc: sc };
   });
   check('hiding the page releases the depth and poster scratch surfaces',
     warm.d > 0 && warm.p > 0 && released.d === 0 && released.p === 0,
@@ -707,6 +712,16 @@ const check = (name, ok, detail) => {
   check('the depth pass and the poster still work after the page is shown again',
     healed.d > 0 && healed.p > 0 && healed.uri > 1000,
     'dScratch ' + healed.d + ' px, pScratch ' + healed.p + ' px, poster ' + healed.uri + ' chars');
+  // The sharpness scorer's surface and grey buffer are the same kind of
+  // module-level scratch as dScratch and pScratch, and they are the only ones
+  // that were never let go: both must be dropped as the page hides and rebuilt
+  // by the next burst, with the score itself unchanged.
+  check('hiding the page releases the sharpness scratch surface',
+    warm.s > 0 && warm.gray === true && released.s === 0 && released.gray === false,
+    'sScratch ' + warm.s + ' -> ' + released.s + ' px, grey ' + warm.gray + ' -> ' + released.gray);
+  check('the sharpness score still works after the page is shown again',
+    healed.s > 0 && healed.gray === true && isFinite(healed.sc),
+    'sScratch ' + healed.s + ' px, grey ' + healed.gray + ', score ' + healed.sc);
   check('no errors from the scratch surfaces', memErrors.length === 0, memErrors.slice(0, 2).join(' | '));
   await p11.close();
 

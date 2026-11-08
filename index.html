@@ -792,6 +792,16 @@ function sharpScore(src,sx,sy,sw,sh){const w=320,h=Math.max(8,Math.round(w*sh/sw
     let s=0,s2=0,n=0;
     for(let j=1;j<h-1;j++)for(let i=1;i<w-1;i++){const k=j*w+i,l=4*g[k]-g[k-1]-g[k+1]-g[k-w]-g[k+w];s+=l;s2+=l*l;n++}
     return s2/n-(s/n)*(s/n)}catch(e){return 0}}
+/* sScratch and sGray are the sharpness scorer's scratch surface and its grey
+   buffer. They are module-level like dScratch, pScratch, stillC and pipeC — and
+   they were the only ones of that set the page never let go of: the 320-px RGBA
+   surface and its Float32Array stayed pinned for as long as the WebView lived
+   after the page was hidden, for a scorer that cannot run at all while the page
+   is hidden (the burst only ever starts from a shutter tap). They are dropped
+   with the page and rebuilt on the next burst, which re-checks the size on every
+   call and rebuilds the grey buffer whenever it is missing, so nothing about a
+   score changes. */
+addEventListener('visibilitychange',()=>{if(document.hidden){sScratch.width=sScratch.height=0;sCtx=null;sGray=null}});
 /* Detail boost is the one capture stage that touches every pixel of the full
    frame (~12 MP), so it used to freeze the main thread for a few hundred ms
    right as the shutter animation and the toast were running; it works in row
