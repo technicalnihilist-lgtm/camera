@@ -695,8 +695,21 @@ async function tune(s,c){const t=s.getVideoTracks()[0];if(!t)return;
   try{if(E.q==='max'&&c.width&&c.height){const st=t.getSettings();
     if(st.width&&st.width<c.width.max*.9)await t.applyConstraints(Object.assign({width:{ideal:c.width.max},height:{ideal:c.height.max},frameRate:{ideal:30}},za?{advanced:[za]}:{}))}}catch(e){}
   if(stream!==s)return;
-  for(const k of ['focusMode','exposureMode','whiteBalanceMode']){
-    if(c[k]&&c[k].includes&&c[k].includes('continuous'))await t.applyConstraints({advanced:za?[{[k]:'continuous'},za]:[{[k]:'continuous'}]}).catch(()=>{})}
+  /* applyConstraints() replaces the track's whole constraint set, so the three
+     calls this made in a row — continuous focus, exposure and white balance —
+     did not add up to three constraints: each one replaced the set the last had
+     just written, and only the final whiteBalanceMode was still in effect when
+     the loop finished. A camera that offers all three kept one of them, and the
+     start path paid three HAL round trips to get there. Every mode the camera
+     reports goes out as one `advanced` list now, in the same order with the
+     current zoom last, so all of them are in effect and a camera that cannot
+     satisfy one skips exactly that one, as it did before. Nothing visible
+     changes; a start, a flip or a quality switch tunes the sensor once. */
+  const adv=[];
+  for(const k of ['focusMode','exposureMode','whiteBalanceMode'])
+    if(c[k]&&c[k].includes&&c[k].includes('continuous'))adv.push({[k]:'continuous'});
+  if(za)adv.push(za);
+  if(adv.length)await t.applyConstraints({advanced:adv}).catch(()=>{});
   report()}
 function report(){const t=track();if(!t||!t.getSettings)return;const st=t.getSettings(),pc=photoCaps,mp=x=>(x/1e6).toFixed(1)+' MP';
   const rows=['Preview stream: '+(st.width||'?')+' × '+(st.height||'?')+(st.frameRate?' @ '+Math.round(st.frameRate)+' fps':'')];

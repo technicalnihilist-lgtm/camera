@@ -513,6 +513,24 @@ const check = (name, ok, detail) => {
     'zoom ' + zoomRestart.z + 'x: after the zoom tap ' + zoomRestart.afterTap +
     ', after a flip + tune ' + zoomRestart.afterRestart + ' (S.dz ' + zoomRestart.dz + ')');
 
+  // The same replacement rule bit tune()'s own pass: it wrote continuous focus,
+  // exposure and white balance as three separate constraint sets in a row, so
+  // each one threw away the previous one and only the last was in effect when
+  // the loop finished. All three must be in the set the track is left with.
+  const zoomModes = await p6.evaluate(() => {
+    const cs = window.__last();
+    if (!cs) return null;
+    const got = {};
+    for (const s of (cs.advanced || []).concat([cs]))
+      if (s) for (const k of ['focusMode', 'exposureMode', 'whiteBalanceMode'])
+        if (s[k] !== undefined) got[k] = s[k];
+    return got;
+  });
+  check('tune() leaves focus, exposure and white balance all in effect',
+    !!zoomModes && zoomModes.focusMode === 'continuous' &&
+    zoomModes.exposureMode === 'continuous' && zoomModes.whiteBalanceMode === 'continuous',
+    JSON.stringify(zoomModes));
+
   const zoomFocus = await p6.evaluate(async () => {
     const w = ms => new Promise(k => setTimeout(k, ms));
     const st = document.querySelector('#stage');
