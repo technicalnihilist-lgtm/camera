@@ -599,6 +599,24 @@ function openTop(){const u=location.href;let w=null;
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(()=>toast('Link copied — paste it into a new tab')).catch(()=>toast('Open this page in a new tab'));
   else toast('Open this page in a new tab')}
 let startId=0,ic=null,photoCaps=null,startPending=0;
+/* HTMLMediaElement.play() returns a promise that settles only once the element
+   has actually started playing, and start() awaited it with no bound — the one
+   await left on the camera path that no event ever ends. A preview whose frames
+   stop arriving (the camera grabbed by another app, a WebView whose media
+   pipeline has wedged, a stream that delivers its metadata and then nothing)
+   leaves that promise pending for ever, and every statement after it is skipped:
+   the preview is never faded in, the gate is never taken down and neither
+   applyZoom() nor tune() ever runs. What is left is a camera app with a black
+   preview, no message, no zoom and an untuned sensor, for the whole session —
+   `v.videoWidth` is already set from the stream's metadata, so the shutter even
+   goes on capturing photos the user cannot frame, and nothing ever retries.
+   The wait is bounded now, exactly as takePhoto, nextFrame, the microphone and
+   the image waits are: a play() that has not started in 5 s (a working start
+   resolves in tens of ms) is treated as the failed play() the app already
+   handles — the `.catch` that has always been here — so the preview is faded
+   in, the gate goes down and the camera is tuned and zoomed as on any other
+   start. A start that completes is untouched: the timer is cleared around it. */
+const PREVIEW_WAIT=5000;
 async function start(){
   if(rec)return;
   const id=++startId;
@@ -620,7 +638,7 @@ async function start(){
       if(old&&(n==='NotReadableError'||n==='AbortError'||n==='TrackStartError')){releaseOld();s=await ask()}else throw e}
     if(id!==startId){s.getTracks().forEach(t=>t.stop());releaseOld();return}
     stream=s;
-    v.srcObject=s;releaseOld();await v.play().catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
+    v.srcObject=s;releaseOld();await imgWait(v.play(),PREVIEW_WAIT).catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
     const t=s.getVideoTracks()[0];
     if(t)t.onended=()=>{if(stream!==s)return;v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
     const c=(t&&t.getCapabilities&&t.getCapabilities())||{};torchOK=!!c.torch;torchOn=false;

@@ -1095,6 +1095,47 @@ const check = (name, ok, detail) => {
     ', capture crop ' + zoomSkip.ratio.toFixed(2) + 'x narrower');
   await p19.close();
 
+  // start() awaited v.play() with no bound. play() settles only once the element
+  // has actually started playing, so a preview whose frames stop arriving (a
+  // wedged media pipeline, a camera grabbed by another app) left it pending for
+  // ever and every statement after it was skipped: the preview was never faded
+  // in, the gate never taken down, and neither applyZoom() nor tune() ran — a
+  // black preview with no message and no camera tuning for the rest of the
+  // session. The wait is bounded now, and a play() that does not start is
+  // treated as the failed play() the app has always ignored.
+  const p20 = await browser.newPage();
+  await p20.setViewport({ width: 400, height: 840 });
+  p20.on('pageerror', e => errors.push('pageerror(hungplay): ' + e.message));
+  p20.on('console', m => { if (m.type() === 'error') errors.push('console(hungplay): ' + m.text().slice(0, 160)); });
+  await p20.evaluateOnNewDocument(() => {
+    const play = HTMLMediaElement.prototype.play;
+    HTMLMediaElement.prototype.play = function () {
+      if (this.id === 'v') { window.__hungPlay = (window.__hungPlay || 0) + 1; return new Promise(() => {}); }
+      return play.apply(this, arguments);
+    };
+  });
+  await p20.goto(URL, { waitUntil: 'load' });
+  const hung = await p20.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    let op = '0';
+    for (let i = 0; i < 90; i++) {
+      await w(100);
+      op = getComputedStyle(document.querySelector('#v')).opacity;
+      if (op === '1') break;
+    }
+    return {
+      asked: window.__hungPlay || 0, op,
+      gate: document.querySelector('#gate').hidden,
+      w: document.querySelector('#v').videoWidth,
+      tuned: document.querySelector('#info').textContent.trim().length > 0,
+    };
+  });
+  check('a preview whose play() never settles still comes up',
+    hung.asked > 0 && hung.op === '1' && hung.gate === true && hung.w > 0 && hung.tuned,
+    'play() hung, preview opacity ' + hung.op + ', gate hidden ' + hung.gate +
+    ', stream ' + hung.w + 'px, tuned ' + hung.tuned);
+  await p20.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
