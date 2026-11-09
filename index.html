@@ -686,24 +686,40 @@ async function start(){
    right after a release can hit. Nothing on screen changes: the preview is
    faded out while hidden, and `start()` fades it back in on return exactly as
    it does on the first load. */
-let camPaused=false;
+let camPaused=false,camHide=false;
+/* The release below is a function now because there are two callers: the hide,
+   and a capture that was in flight when the hide landed. A photo capture owns
+   the sensor exactly as a take does, and the handler released it regardless: a
+   page hidden while the burst was still running had its tracks stopped and
+   `v.srcObject` cleared underneath `snapShot()`, so the frame grab failed, the
+   crop measured 0 × 0 and the shot the user had already taken came back as
+   "Camera is not ready yet" — on a page nobody could see — and nothing was
+   saved. The capture keeps the camera for as long as it is using it and
+   releases it on its way out (see `snap()`), so a hidden page pins the sensor
+   for at most the length of one capture, never for the rest of the session.
+   A hide during a take is still left alone entirely: a take cut off that way
+   would be lost. */
+function dropCam(){
+  startId++;                              /* a start() still in flight is now stale */
+  const s=stream;
+  /* No stream yet means the device has not answered a start() at all: there is
+     nothing to release, but the page still owes the camera a fresh take on
+     return, because the hide has just made that start() stale — it stops the
+     stream it is given and attaches nothing, so without this the app came back
+     to a black preview with no camera and no message, and stayed that way until
+     the camera was flipped or the app restarted. */
+  if(!s){camPaused=!!startPending;return}
+  camPaused=true;stream=null;torchOn=false;
+  try{s.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}
+  try{v.srcObject=null}catch(e){}
+  v.style.opacity=0;
+}
 addEventListener('visibilitychange',()=>{
   if(document.hidden){
     if(rec)return;
-    startId++;                              /* a start() still in flight is now stale */
-    const s=stream;
-    /* No stream yet means the device has not answered a start() at all: there
-       is nothing to release, but the page still owes the camera a fresh take
-       on return, because the hide has just made that start() stale — it stops
-       the stream it is given and attaches nothing, so without this the app
-       came back to a black preview with no camera and no message, and stayed
-       that way until the camera was flipped or the app restarted. */
-    if(!s){camPaused=!!startPending;return}
-    camPaused=true;stream=null;torchOn=false;
-    try{s.getTracks().forEach(t=>{try{t.stop()}catch(e){}})}catch(e){}
-    try{v.srcObject=null}catch(e){}
-    v.style.opacity=0;
-  }else if(camPaused){camPaused=false;start()}
+    if(capturing){camHide=true;return}     /* the shot in flight lets go on its way out */
+    dropCam();
+  }else{camHide=false;if(camPaused){camPaused=false;start()}}
 });
 /* ---------- capture engine: tuning, focus, readout ---------- */
 async function tune(s,c){const t=s.getVideoTracks()[0];if(!t)return;
@@ -999,7 +1015,11 @@ const nextFrame=()=>new Promise(r=>{let done=false,t=0;
    surface is in use. */
 async function snap(){capturing=true;
   try{await snapShot()}
-  finally{capturing=false;if(document.hidden)dropStill()}}
+  finally{capturing=false;if(document.hidden){dropStill();
+    /* a hide that landed while this capture held the camera could not release
+       it without losing the shot; it is released here, exactly once, on the
+       capture's way out */
+    if(camHide){camHide=false;dropCam()}}}}
 async function snapShot(){
   const fx=$('#fx');killAnims(fx);fx.animate([{opacity:.85},{opacity:0}],{duration:420,easing:'ease-out'});
   spr($('#stage'),{s:.96},{s:1});

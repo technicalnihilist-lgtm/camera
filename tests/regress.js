@@ -816,6 +816,58 @@ const check = (name, ok, detail) => {
   check('no errors from the camera lifecycle', camErrors.length === 0, camErrors.slice(0, 2).join(' | '));
   await p12.close();
 
+  // A photo capture owns the camera in exactly the same way a take does, and the
+  // hide handler released the sensor regardless of whether a shot was in flight:
+  // a page hidden while the burst was still running had its tracks stopped and
+  // `v.srcObject` cleared underneath snapShot(), so the frame grab failed, the
+  // crop measured 0x0 and the photo the user had already taken was dropped with
+  // "Camera is not ready yet" — on a page nobody could see. The capture keeps
+  // the camera for as long as it is using it and releases it on its way out, so
+  // a hidden page pins the sensor for at most the length of one capture.
+  const p23 = await browser.newPage();
+  await p23.setViewport({ width: 400, height: 840 });
+  const shotErrors = [];
+  p23.on('pageerror', e => shotErrors.push('pageerror(shot): ' + e.message));
+  p23.on('console', m => { if (m.type() === 'error') shotErrors.push('console(shot): ' + m.text().slice(0, 160)); });
+  await p23.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  await p23.click('#bE'); await wait(900);
+  await p23.click('#qseg button[data-q="std"]'); await wait(2200);
+  await p23.click('#edone'); await wait(1400);
+  const hideShot = await p23.evaluate(async () => {
+    const before = items.length;
+    document.querySelector('#shut').click();      // busy and capturing are set synchronously
+    const inFlight = busy && capturing;
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    const kept = stream !== null && v.srcObject !== null;
+    for (let i = 0; i < 120; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (!busy && !capturing) break;
+    }
+    const saved = items.length - before;
+    const released = stream === null && v.srcObject === null && camPaused;
+    return { inFlight, kept, saved, released };
+  });
+  check('a hide during a photo capture still saves the shot',
+    hideShot.inFlight && hideShot.kept && hideShot.saved === 1,
+    'in flight ' + hideShot.inFlight + ', camera kept ' + hideShot.kept + ', saved ' + hideShot.saved);
+  check('and the camera is released once that capture is done',
+    hideShot.released, 'released ' + hideShot.released);
+  const hideShotBack = await p23.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    for (let i = 0; i < 40; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (stream && v.videoWidth > 0) break;
+    }
+    return { live: !!stream, w: v.videoWidth };
+  });
+  check('and taken up again when the page comes back',
+    hideShotBack.live && hideShotBack.w > 0, hideShotBack.w + 'px');
+  check('no errors from the hidden capture', shotErrors.length === 0, shotErrors.slice(0, 2).join(' | '));
+  await p23.close();
+
   // A start() that is still waiting for the device when the page hides must not
   // leave the app without a camera on return. The hide makes that start stale —
   // it stops the stream it is given and attaches nothing — and the handler only
