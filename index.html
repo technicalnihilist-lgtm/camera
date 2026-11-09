@@ -768,10 +768,24 @@ $('#stage').addEventListener('pointerdown',e=>{if(e.target.closest('.g'))return;
    viewAspect). Both reads land right after the parallax loop wrote
    style.translate, so each one forced a full synchronous layout: ~120 flushes
    a second while a finger drags a settings slider, ~30 a second while
-   recording. Measure once and reuse; resize drops the cache. */
+   recording. Measure once and reuse; resize drops the cache.
+   What that one read measured was the stage's *visual* rect, and the stage is
+   the one element on the page that is almost always transformed: the intro
+   scales it from 0.6, every capture and every flip bounces it, and the
+   parallax itself translates it (it is the -7 layer in PL). getBoundingClientRect()
+   reports all of that, so a pointermove that landed while the intro was still
+   running — the first touch on the "Allow camera" gate is inside that second —
+   cached a 240×504 box at x=80 for a 400×840 stage, and because nothing but a
+   resize ever drops the cache, every tap-to-focus for the rest of the session
+   was mapped through that box (a tap at x=300 asked the camera to focus at
+   0.92 of the frame instead of 0.75, and the parallax saturated at the middle
+   third of the screen). The framing is computed from the layout box, so measure
+   the layout box: the stage's own offset size, which no transform can touch,
+   at its offset parent's position — #app, which no animation and no parallax
+   layer ever transforms. Same box, same single read, unchanged framing. */
 let stageRectCache=null;
-function stageBox(){if(!stageRectCache){const r=$('#stage').getBoundingClientRect();
-  stageRectCache={left:r.left,top:r.top,width:r.width,height:r.height}}return stageRectCache}
+function stageBox(){if(!stageRectCache){const a=app.getBoundingClientRect(),st=$('#stage');
+  stageRectCache={left:a.left+st.offsetLeft,top:a.top+st.offsetTop,width:st.offsetWidth,height:st.offsetHeight}}return stageRectCache}
 function viewAspect(){const r=stageBox();let a=r.width/r.height;
   if(!a||!isFinite(a))a=9/16;if(S.mode==='square')a=1;return a}
 function cropRect(){return cropFor(v.videoWidth,v.videoHeight)}

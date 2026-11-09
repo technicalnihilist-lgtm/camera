@@ -75,6 +75,25 @@ const check = (name, ok, detail) => {
   check('depth controls live in settings', s0.hasDepthCtl === true);
   check('capture engine has no depth controls', s0.depthInEngine === false);
 
+  // the framing box is the stage's layout box, not whatever the intro/bounce/
+  // parallax transform happened to be at the moment it was first measured
+  const sbox = await page.evaluate(() => {
+    dispatchEvent(new Event('resize'));                 // drops the cached box
+    const st = document.querySelector('#stage'), keep = st.style.transform;
+    st.style.transform = 'scale(.6) translateY(40px)';  // an intro/bounce frame
+    const b = stageBox();
+    st.style.transform = keep;
+    dispatchEvent(new Event('resize'));
+    const a = document.querySelector('#app').getBoundingClientRect();
+    return { w: b.width, h: b.height, l: b.left, t: b.top,
+      aw: a.width, ah: a.height, al: a.left, at: a.top };
+  });
+  check('the framing box ignores the stage animation',
+    Math.abs(sbox.w - sbox.aw) < 1 && Math.abs(sbox.h - sbox.ah) < 1 &&
+    Math.abs(sbox.l - sbox.al) < 1 && Math.abs(sbox.t - sbox.at) < 1,
+    sbox.w + 'x' + sbox.h + ' at ' + sbox.l + ',' + sbox.t +
+    ' vs stage ' + sbox.aw + 'x' + sbox.ah + ' at ' + sbox.al + ',' + sbox.at);
+
   // use the small stream so the suite stays quick on a 2-core pod
   await page.click('#bE'); await wait(900);
   await page.click('#qseg button[data-q="std"]'); await wait(2200);
