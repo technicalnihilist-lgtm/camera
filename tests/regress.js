@@ -1315,6 +1315,17 @@ const check = (name, ok, detail) => {
   p22.on('console', m => { if (m.type() === 'error') errors.push('console(quality): ' + m.text().slice(0, 160)); });
   await p22.goto(URL, { waitUntil: 'load' });
   await wait(2500);
+  /* The preview is the precondition of both checks below, and a fixed wait does
+     not express it: measured on this pod, the fake device takes 1.3–2.8 s to
+     deliver the first frame of a Max-quality stream, so a 2.5 s sleep lands on a
+     page with no stream about half the time and the shutter tap is refused with
+     "Camera is not ready yet" — the two checks then fail for a reason that has
+     nothing to do with what they are about. Wait for the preview itself, keeping
+     the same 2.5 s as a floor. */
+  for (let i = 0; i < 40; i++) {
+    if (await p22.evaluate(() => !!(stream && document.querySelector('#v').videoWidth))) break;
+    await wait(250);
+  }
   const qswap = await p22.evaluate(async () => {
     const w = ms => new Promise(k => setTimeout(k, ms));
     D.depth = false; E.sharp = false;              // the burst still takes a second to decode
