@@ -1286,14 +1286,24 @@ if(window.AndroidCam){
          the decode/write left the UI frozen in long bursts. 512 KB slices cost
          the same total time (measured 612 ms vs 626 ms for a 21 MB clip) but the
          longest stall falls from 59 ms to 16 ms, and the yield between slices
-         lets the toast and the shutter keep painting. */
+         lets the toast and the shutter keep painting.
+         The yield itself was `setTimeout(0)`, whose 4 ms nesting clamp makes
+         every slice pay ~4.9 ms of pure idle (measured: 420 of them take
+         2047 ms as timers against 25 ms as message tasks). A Max-quality take
+         is 28 Mbps, so a 60 s clip is 420 slices and the clamp alone added
+         ~2 s to its save — the save time grew with the length of the clip for
+         no reason at all. Worse, a timer is throttled to one per second once
+         the WebView is hidden, so a save the user backgrounded mid-way stalled
+         for minutes; a message task is not throttled. yieldTask() hands the
+         thread back the same way — a macrotask, so frames still paint between
+         slices — without the clamp. */
       const CH=512*1024;let off=0;
       while(off<bl.size){
         const slice=bl.slice(off,Math.min(off+CH,bl.size));
         const b64=await new Promise((ok,no)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',')[1]||'');fr.onerror=no;fr.readAsDataURL(slice)});
         if(window.AndroidCam.write(id,b64)!=='ok')throw new Error('write');
         off+=CH;
-        if(off<bl.size)await sleep(0);
+        if(off<bl.size)await yieldTask();
       }
       const done=window.AndroidCam.close(id);id=0;
       toast(done&&done.indexOf('ok')===0?'Saved to your Gallery':'Could not save ('+done+')');
