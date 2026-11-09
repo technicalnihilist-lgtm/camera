@@ -1154,6 +1154,83 @@ const check = (name, ok, detail) => {
     ', stream ' + hung.w + 'px, tuned ' + hung.tuned);
   await p20.close();
 
+
+  // "Use phone camera app" is the only way out of the gate when the browser will
+  // not give the page a camera, and taking the gate down was all it did: nothing
+  // put it back if the picker was dismissed. The app was left on a black preview
+  // with no message and no "Allow camera" to retry from — no start() runs while
+  // there is no stream to resume — and the shutter only reopened the picker. A
+  // pick that starts at the gate now restores it when it is dismissed, and a
+  // pick that delivers a file is still the native-picker mode it asked for.
+  const p21 = await browser.newPage();
+  await p21.setViewport({ width: 400, height: 840 });
+  p21.on('pageerror', e => errors.push('pageerror(nativepick): ' + e.message));
+  p21.on('console', m => { if (m.type() === 'error') errors.push('console(nativepick): ' + m.text().slice(0, 160)); });
+  await p21.evaluateOnNewDocument(() => {
+    navigator.mediaDevices.getUserMedia = () => {
+      window.__camAsks = (window.__camAsks || 0) + 1;
+      return Promise.reject(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+    };
+  });
+  await p21.goto(URL, { waitUntil: 'load' });
+  await wait(1500);
+  const gate0 = await p21.evaluate(() => ({
+    hidden: document.querySelector('#gate').hidden,
+    msg: document.querySelector('#gm').textContent,
+    btn: document.querySelector('#gb').textContent,
+  }));
+  const fc1p = p21.waitForFileChooser({ timeout: 8000 });
+  await p21.click('#gn');
+  const fc1 = await fc1p;
+  await fc1.cancel();
+  await wait(500);
+  const gate1 = await p21.evaluate(() => ({
+    hidden: document.querySelector('#gate').hidden,
+    msg: document.querySelector('#gm').textContent,
+    btn: document.querySelector('#gb').textContent,
+    items: items.length,
+  }));
+  check('a cancelled picker leaves the gate back on screen',
+    gate0.hidden === false && gate1.hidden === false && gate1.items === 0 &&
+    gate1.msg === gate0.msg && gate1.btn === gate0.btn,
+    'gate hidden ' + gate1.hidden + ', same message ' + (gate1.msg === gate0.msg) +
+    ', button "' + gate1.btn + '"');
+
+  const tmpPick = path.join(require('os').tmpdir(), 'lgc-pick.jpg');
+  require('fs').writeFileSync(tmpPick, Buffer.alloc(4096, 7));
+  let gate2 = { hidden: false, items: -1, native: false }, gate3 = { hidden: false, items: -1 };
+  try {
+    const fc2p = p21.waitForFileChooser({ timeout: 8000 });
+    await p21.click('#gn');
+    const fc2 = await fc2p;
+    await fc2.accept([tmpPick]);
+    await wait(600);
+    gate2 = await p21.evaluate(() => ({
+      hidden: document.querySelector('#gate').hidden, items: items.length, native: native,
+    }));
+  } catch (e) { gate2.err = e.message.slice(0, 80); }
+  check('a picker that delivers a file still takes the gate down',
+    gate2.hidden === true && gate2.items === 1 && gate2.native === true,
+    'gate hidden ' + gate2.hidden + ', ' + gate2.items + ' item(s), native ' + gate2.native +
+    (gate2.err ? ', ' + gate2.err : ''));
+
+  // a picker opened later from the shutter is native-picker mode, not the gate
+  try {
+    const fc3p = p21.waitForFileChooser({ timeout: 8000 });
+    await p21.click('#shut');
+    const fc3 = await fc3p;
+    await fc3.cancel();
+    await wait(500);
+    gate3 = await p21.evaluate(() => ({
+      hidden: document.querySelector('#gate').hidden, items: items.length,
+    }));
+  } catch (e) { gate3.err = e.message.slice(0, 80); }
+  check('a picker opened from the shutter cannot bring the gate back',
+    gate3.hidden === true && gate3.items === 1,
+    'gate hidden ' + gate3.hidden + ', ' + gate3.items + ' item(s)' +
+    (gate3.err ? ', ' + gate3.err : ''));
+  await p21.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

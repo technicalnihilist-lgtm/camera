@@ -727,12 +727,29 @@ async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
   try{await t.applyConstraints({advanced:za?[adv,za]:[adv]})}catch(err){return}
   clearTimeout(afT);afT=setTimeout(()=>{if(track()!==t||!c.focusMode||!c.focusMode.includes('continuous'))return;
     const z2=zoomAdv();t.applyConstraints({advanced:z2?[{focusMode:'continuous'},z2]:[{focusMode:'continuous'}]}).catch(()=>{})},3000)}
-function gate(m,label,action){gbAction=action||'retry';$('#gm').textContent=m;$('#gb').textContent=label||'Allow camera';const g=$('#gate');g.hidden=false;spr($('#gate div'),{s:.85,o:0},{s:1,o:1})}
-let gbAction='retry',native=false;
+function gate(m,label,action){gbAction=action||'retry';lastGate={m,label:label||'Allow camera',action:gbAction};
+  $('#gm').textContent=m;$('#gb').textContent=lastGate.label;const g=$('#gate');g.hidden=false;spr($('#gate div'),{s:.85,o:0},{s:1,o:1})}
+let gbAction='retry',native=false,gatePick=false,lastGate=null;
 const fi=$('#fi');
 function pickNative(){fi.value='';fi.accept=S.mode==='video'?'video/*':'image/*';fi.setAttribute('capture',S.face==='user'?'user':'environment');fi.click()}
-$('#gn').onclick=()=>{native=true;$('#gate').hidden=true;pickNative()};
-fi.onchange=()=>{const f=fi.files&&fi.files[0];if(!f)return;
+/* "Use phone camera app" is the one way out of the gate when the browser will
+   not give the page a camera, and taking the gate down was all it did: the
+   picker it opened was the end of the app's own state machine. Dismissing that
+   picker — the ordinary way out of a file dialog — left the app on a black
+   preview with no message and no gate to retry from, because nothing else puts
+   it back: no start() is called while there is no stream to resume, so the
+   gate's "Allow camera" was gone for good and the shutter only reopened the
+   picker. The gate now remembers what it said and comes back when a pick that
+   started there is dismissed (`cancel`, which the file input fires whether the
+   user cancels or the dialog is closed for them), so a cancelled picker leaves
+   exactly the screen the user was on. A pick that delivers a file is the
+   native-picker mode the app asked for and takes the gate down as before, and
+   a picker opened from the shutter afterwards cannot bring it back. */
+function restoreGate(){if(!gatePick)return;gatePick=false;
+  if(lastGate&&!stream)gate(lastGate.m,lastGate.label,lastGate.action)}
+fi.addEventListener('cancel',restoreGate);
+$('#gn').onclick=()=>{native=true;$('#gate').hidden=true;gatePick=true;pickNative()};
+fi.onchange=()=>{const f=fi.files&&fi.files[0];if(!f)return restoreGate();gatePick=false;
   const u=URL.createObjectURL(f),isV=f.type.startsWith('video/');
   const ext=(f.name.split('.').pop()||(isV?'mp4':'jpg')).toLowerCase();
   add({t:isV?'v':'i',u,x:ext,p:''});toast(isV?'Video saved to gallery':'Photo saved to gallery')};
