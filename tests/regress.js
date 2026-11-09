@@ -1250,6 +1250,41 @@ const check = (name, ok, detail) => {
     (gate3.err ? ', ' + gate3.err : ''));
   await p21.close();
 
+  // The quality row is the only control outside the flip button that calls
+  // start(), and unlike the flip, the mode row and the zoom row it had no
+  // rec/busy guard. The top bar stays live while a Max-quality burst runs, so a
+  // quality tap during a capture tore the camera down underneath snapShot():
+  // startId moved on, the old tracks were released and v.srcObject was replaced
+  // between the crop being measured and the frame being drawn. A capture owns
+  // the camera until it is done; the tap is refused instead.
+  const p22 = await browser.newPage();
+  await p22.setViewport({ width: 400, height: 840 });
+  p22.on('pageerror', e => errors.push('pageerror(quality): ' + e.message));
+  p22.on('console', m => { if (m.type() === 'error') errors.push('console(quality): ' + m.text().slice(0, 160)); });
+  await p22.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const qswap = await p22.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    D.depth = false; E.sharp = false;              // the burst still takes a second to decode
+    const id0 = startId, q0 = E.q, n0 = items.length;
+    document.querySelector('#shut').click();
+    await w(120);
+    const heldBusy = busy;
+    document.querySelector('#bE').click();         // the engine sheet, while the capture runs
+    await w(400);
+    document.querySelector('#qseg button[data-q="high"]').click();
+    for (let i = 0; i < 150; i++) { await w(100); if (!busy) break; }
+    await w(400);
+    return { heldBusy, id0, id1: startId, q0, q1: E.q, n0, n1: items.length };
+  });
+  check('a quality tap cannot swap the camera under a capture in flight',
+    qswap.heldBusy === true && qswap.id1 === qswap.id0 && qswap.q1 === qswap.q0,
+    'capture held the camera ' + qswap.heldBusy + ', start ' + qswap.id0 + ' -> ' + qswap.id1 +
+    ', quality ' + qswap.q0 + ' -> ' + qswap.q1);
+  check('the capture interrupted by the quality tap still saves its photo',
+    qswap.n1 === qswap.n0 + 1, (qswap.n1 - qswap.n0) + ' photo(s) saved');
+  await p22.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

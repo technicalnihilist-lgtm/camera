@@ -350,7 +350,23 @@ loadCfg();
 applyGlass();applyBounce();
 $('#bE').onclick=()=>{if(rec)return toast('Stop recording first');report();showSheet($('#eng'))};
 $('#edone').onclick=()=>hideSheet();
-$$('#qseg button').forEach(b=>b.onclick=()=>{if(b.dataset.q===E.q)return;E.q=b.dataset.q;
+/* The quality row was the one control that could still tear the camera down
+   underneath a capture in flight. It is the only place outside the flip button
+   that calls start(), and unlike the flip, the mode row and the zoom row it had
+   no `rec`/`busy` guard — and the top bar stays live for the second or more a
+   Max-quality burst spends decoding its stills. A quality tap in that window ran
+   start() while snapShot() was still holding the camera: `stream` is set to
+   null, the old tracks are released and `v.srcObject` is replaced with a new,
+   still-empty stream between the moment the crop is measured and the moment the
+   frame is drawn, so the photo that gets saved is the blank frame the new video
+   element is holding; on a phone the released sensor can also make the pending
+   takePhoto() fail, and the burst then silently falls back to preview frames.
+   E.q had already moved on, so nothing said anything had gone wrong. Refused
+   for the same reason, and with the same two messages, the mode, zoom and flip
+   rows already refuse: a capture owns the camera until it is done. */
+$$('#qseg button').forEach(b=>b.onclick=()=>{if(b.dataset.q===E.q)return;
+  if(rec||busy)return toast(rec?'Stop recording first':'Wait for the timer to finish');
+  E.q=b.dataset.q;
   $$('#qseg button').forEach(x=>x.classList.toggle('on',x===b));
   toast({max:'Max quality · highest sensor resolution',high:'High quality · 4K stream',std:'Standard · 1080p, faster'}[E.q]);start()});
 function bindSw(id,key){const b=$(id),w=$('.sw',b);b.onclick=()=>{E[key]=!E[key];w.classList.toggle('on',E[key])}}
