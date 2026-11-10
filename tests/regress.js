@@ -562,6 +562,29 @@ const check = (name, ok, detail) => {
   check('tap-to-focus keeps the hardware zoom, before and after its restore',
     zoomFocus.onTap === 2 && zoomFocus.afterRestore === 2,
     'on the tap ' + zoomFocus.onTap + ', after the 3 s restore ' + zoomFocus.afterRestore);
+
+  // The same replacement rule runs the other way and was still open. tune() is
+  // the only writer that puts the camera's continuous focus, exposure and white
+  // balance into effect, and the sets written after it — a zoom tap, the torch
+  // toggle, a tap-to-focus and its restore — sent only their own constraint, so
+  // the first tap on 1x/2x/3x dropped all three and left the sensor on its
+  // default modes. The set the track is left with after a zoom tap must still
+  // carry them, and the zoom it was asked for.
+  const zoomTapModes = await p6.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('.zoom button[data-z="3"]').click();
+    await w(500);
+    const cs = window.__last();
+    const got = {};
+    for (const s of ((cs && cs.advanced) || []).concat([cs])) if (s)
+      for (const k of ['focusMode', 'exposureMode', 'whiteBalanceMode', 'zoom'])
+        if (s[k] !== undefined) got[k] = s[k];
+    return got;
+  });
+  check('a zoom tap keeps focus, exposure and white balance in effect',
+    zoomTapModes.focusMode === 'continuous' && zoomTapModes.exposureMode === 'continuous' &&
+    zoomTapModes.whiteBalanceMode === 'continuous' && zoomTapModes.zoom === 3,
+    JSON.stringify(zoomTapModes));
   await p6.close();
 
   // The burst waits for the preview's next frame between candidates, and that

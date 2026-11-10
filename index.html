@@ -553,8 +553,9 @@ $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.togg
 $('#bT').onclick=e=>{S.tm=S.tm===0?3:S.tm===3?10:0;$('#tl').textContent=S.tm?S.tm+'s':'';e.currentTarget.classList.toggle('on',!!S.tm);e.currentTarget.setAttribute('aria-pressed',!!S.tm)};
 $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on this camera');
   const btn=e.currentTarget,next=!torchOn;
-  const za=zoomAdv();
-  try{await stream.getVideoTracks()[0].applyConstraints({advanced:za?[{torch:next},za]:[{torch:next}]});
+  const za=zoomAdv(),t=track();
+  try{const c=t&&t.getCapabilities?t.getCapabilities():null;
+    await t.applyConstraints({advanced:[{torch:next}].concat(modeAdv(c),za?[za]:[])});
     torchOn=next;btn.classList.toggle('on',torchOn);btn.setAttribute('aria-pressed',torchOn)}
   catch{toast('Flash could not turn on')}};
 
@@ -587,7 +588,7 @@ function vt(){v.style.transform=`scale(${(S.face==='user'?-1:1)*S.dz},${S.dz})`}
 function applyZoom(){const t=track(),c=(t&&t.getCapabilities&&t.getCapabilities())||{};
   if(c.zoom){const z=Math.min(c.zoom.max,Math.max(c.zoom.min,S.z));S.dz=1;vt();
     const dig=()=>{if(!t||track()!==t||S.dz!==1)return;S.dz=S.z;vt()};
-    t.applyConstraints({advanced:[{zoom:z}]}).then(()=>{
+    t.applyConstraints({advanced:modeAdv(c).concat([{zoom:z}])}).then(()=>{
       if(track()!==t)return;
       let st;try{st=t.getSettings&&t.getSettings()}catch(e){st=null}
       if(!st||st.zoom==null)return;
@@ -607,6 +608,25 @@ function zoomAdv(){const t=track();if(!t||!t.getCapabilities)return null;
   let c;try{c=t.getCapabilities()}catch(e){return null}
   if(!c||!c.zoom)return null;
   return{zoom:Math.min(c.zoom.max,Math.max(c.zoom.min,S.z))}}
+/* zoomAdv() above exists because a constraint set replaces the track's whole
+   set, so a call written after tune() has to carry the zoom forward or the zoom
+   is lost. The same rule runs the other way and was still open: tune() is the
+   only writer that puts the camera's continuous focus, exposure and white
+   balance into effect, and the four sets written after it — a zoom tap, the
+   torch toggle, the single-shot focus a tap on the preview asks for and its 3 s
+   restore — sent only their own constraint. So the first tap on 1x/2x/3x, or on
+   the preview, dropped all three and left the sensor on its default modes for
+   the rest of the session: a camera that had been focusing continuously stopped,
+   which is the same loss run 1/10 fixed from the other side. Measured against
+   the fake device, the set the track is left with after a 2x tap is
+   {advanced:[{zoom:2}]} — no focusMode, no exposureMode, no whiteBalanceMode.
+   Every one of those sets carries the modes now, built here and in the same
+   order tune() has always sent them, with the set's own constraint last. A
+   camera that offers none of the three is sent exactly the set it got before. */
+function modeAdv(c,omitFocus){const adv=[];
+  for(const k of ['focusMode','exposureMode','whiteBalanceMode'])
+    if((k!=='focusMode'||!omitFocus)&&c&&c[k]&&c[k].includes&&c[k].includes('continuous'))adv.push({[k]:'continuous'});
+  return adv}
 $$('.zoom button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to change zoom':'Wait for the timer to finish');
   S.z=+b.dataset.z;$$('.zoom button').forEach(x=>x.classList.toggle('on',x===b));applyZoom()});
 const SEC_HEAD='Camera blocked by browser security';
@@ -753,9 +773,7 @@ async function tune(s,c){const t=s.getVideoTracks()[0];if(!t)return;
      current zoom last, so all of them are in effect and a camera that cannot
      satisfy one skips exactly that one, as it did before. Nothing visible
      changes; a start, a flip or a quality switch tunes the sensor once. */
-  const adv=[];
-  for(const k of ['focusMode','exposureMode','whiteBalanceMode'])
-    if(c[k]&&c[k].includes&&c[k].includes('continuous'))adv.push({[k]:'continuous'});
+  const adv=modeAdv(c);
   if(za)adv.push(za);
   if(adv.length)await t.applyConstraints({advanced:adv}).catch(()=>{});
   report()}
@@ -772,9 +790,9 @@ async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
   if(c.focusMode&&c.focusMode.includes&&c.focusMode.includes('single-shot'))adv.focusMode='single-shot';
   if(!Object.keys(adv).length)return;
   const za=zoomAdv();
-  try{await t.applyConstraints({advanced:za?[adv,za]:[adv]})}catch(err){return}
+  try{await t.applyConstraints({advanced:[adv].concat(modeAdv(c,true),za?[za]:[])})}catch(err){return}
   clearTimeout(afT);afT=setTimeout(()=>{if(track()!==t||!c.focusMode||!c.focusMode.includes('continuous'))return;
-    const z2=zoomAdv();t.applyConstraints({advanced:z2?[{focusMode:'continuous'},z2]:[{focusMode:'continuous'}]}).catch(()=>{})},3000)}
+    const z2=zoomAdv();t.applyConstraints({advanced:[{focusMode:'continuous'}].concat(modeAdv(c,true),z2?[z2]:[])}).catch(()=>{})},3000)}
 function gate(m,label,action){gbAction=action||'retry';lastGate={m,label:label||'Allow camera',action:gbAction};
   $('#gm').textContent=m;$('#gb').textContent=lastGate.label;const g=$('#gate');g.hidden=false;spr($('#gate div'),{s:.85,o:0},{s:1,o:1})}
 let gbAction='retry',native=false,gatePick=false,lastGate=null;
