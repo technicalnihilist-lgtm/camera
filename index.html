@@ -321,7 +321,18 @@ function applyGlass(){const t=+$('#rT').value;document.documentElement.style.set
 function applyBounce(){const b=+$('#rB').value;S.b=b/100;$('#ob').textContent=b+'%'}
 $('#rT').oninput=()=>{applyGlass();saveCfg()};$('#rB').oninput=()=>{applyBounce();saveCfg()};
 $('#rB').onchange=()=>spr($('#sheet'),{s:.93},{s:1});
-$('#snd').onclick=()=>{S.snd=!S.snd;$('#snd .sw').classList.toggle('on',S.snd);if(S.snd)plop();saveCfg()};
+/* The six on/off rows in Settings and Capture engine carried their state only as
+   a colour on an empty <i class="sw">, which is decoration: the <button> itself
+   had no state, so a screen reader announced "Water sound, button" whether the
+   sound was on or off and a user who cannot see the green had no way to tell.
+   The three top-bar toggles have always maintained aria-pressed; the switch rows
+   now do too, through one setter that is the single place a flag becomes state —
+   so a boot default, a restored preference and a tap all report the state that
+   is actually in effect, exactly as the .sw class already did. Nothing on screen
+   changes: the same class, on the same element, at the same moment. */
+function setSw(id,on){const b=$(id);if(!b)return;const w=$('.sw',b);
+  if(w)w.classList.toggle('on',!!on);b.setAttribute('aria-pressed',on?'true':'false')}
+$('#snd').onclick=()=>{S.snd=!S.snd;setSw('#snd',S.snd);if(S.snd)plop();saveCfg()};
 $('#bS').onclick=()=>{if(rec)return toast('Stop recording first');showSheet($('#sheet'))};
 /* Every slider `input` event wrote the whole config straight to localStorage:
    dragging one slider across the sheet fires ~60 input events, so a single drag
@@ -343,10 +354,14 @@ function loadCfg(){let c=null;try{c=JSON.parse(localStorage.getItem('lgc.cfg')||
   if(!c||typeof c!=='object')return;
   const set=(id,v)=>{if(v!=null&&v!=='')try{$(id).value=v}catch(e){}};
   set('#rT',c.t);set('#rB',c.b);set('#rP',c.pk);set('#rD',c.dk);
-  if(c.snd!=null){S.snd=!!c.snd;$('#snd .sw').classList.toggle('on',S.snd)}
-  if(c.par!=null){D.par=!!c.par;$('#t4d .sw').classList.toggle('on',D.par)}
-  if(c.dp!=null){D.depth=!!c.dp;$('#eDepth .sw').classList.toggle('on',D.depth)}}
+  if(c.snd!=null){S.snd=!!c.snd;setSw('#snd',S.snd)}
+  if(c.par!=null){D.par=!!c.par;setSw('#t4d',D.par)}
+  if(c.dp!=null){D.depth=!!c.dp;setSw('#eDepth',D.depth)}}
 loadCfg();
+/* the two effect switches are placed by applyPar()/applyDepth() below, but the
+   water sound has no such setter, so a launch with no saved config would leave
+   its row with no state at all */
+setSw('#snd',S.snd);
 applyGlass();applyBounce();
 $('#bE').onclick=()=>{if(rec)return toast('Stop recording first');report();showSheet($('#eng'))};
 $('#edone').onclick=()=>hideSheet();
@@ -369,7 +384,8 @@ $$('#qseg button').forEach(b=>b.onclick=()=>{if(b.dataset.q===E.q)return;
   E.q=b.dataset.q;
   $$('#qseg button').forEach(x=>x.classList.toggle('on',x===b));
   toast({max:'Max quality · highest sensor resolution',high:'High quality · 4K stream',std:'Standard · 1080p, faster'}[E.q]);start()});
-function bindSw(id,key){const b=$(id),w=$('.sw',b);b.onclick=()=>{E[key]=!E[key];w.classList.toggle('on',E[key])}}
+function bindSw(id,key){const b=$(id);setSw(id,E[key]);
+  b.onclick=()=>{E[key]=!E[key];setSw(id,E[key])}}
 bindSw('#eBurst','burst');bindSw('#eSharp','sharp');bindSw('#eAF','af');
 
 /* ---------- 4D tilt parallax ---------- */
@@ -472,7 +488,7 @@ let parTouch=false;
    reduced-motion preference nothing changes — D.par and D.depth already agreed
    with their switches. */
 function applyPar(){
-  PAR.on=D.par;app.classList.toggle('par',D.par);$('#t4d .sw').classList.toggle('on',D.par);
+  PAR.on=D.par;app.classList.toggle('par',D.par);setSw('#t4d',D.par);
   if(!D.par){PAR.ax=PAR.ay=PAR.tx=PAR.ty=0;parReset();if(PAR.raf){cancelAnimationFrame(PAR.raf);PAR.raf=0}disableTilt()}
   else{if(parTouch)enableTilt();parKick()}
 }
@@ -518,15 +534,15 @@ function depthPass(ctx,canvas,k){
 function applyDepth(){
   D.depth=!!D.depth;
   app.classList.toggle('depth',D.depth);
-  $('#eDepth .sw').classList.toggle('on',D.depth);
+  setSw('#eDepth',D.depth);
 }
 
-$('#eDepth').onclick=()=>{D.depth=!D.depth;$('#eDepth .sw').classList.toggle('on',D.depth);applyDepth();saveCfg();toast(D.depth?'Depth effect on — background softens':'Depth effect off')};
+$('#eDepth').onclick=()=>{D.depth=!D.depth;applyDepth();saveCfg();toast(D.depth?'Depth effect on — background softens':'Depth effect off')};
 function syncDepth(){D.k=+$('#rD').value/100;$('#od').textContent=$('#rD').value+'%';
   document.documentElement.style.setProperty('--dbl',(3+D.k*13).toFixed(1)+'px')}
 $('#rD').oninput=()=>{syncDepth();saveCfg()};
 document.documentElement.style.setProperty('--dbl',(3+D.k*13).toFixed(1)+'px');
-$('#t4d').onclick=()=>{D.par=!D.par;$('#t4d .sw').classList.toggle('on',D.par);applyPar();saveCfg();toast(D.par?'4D tilt on — move the phone':'4D tilt off')};
+$('#t4d').onclick=()=>{D.par=!D.par;applyPar();saveCfg();toast(D.par?'4D tilt on — move the phone':'4D tilt off')};
 function applyParStrength(){const v=+$('#rP').value;PAR.k=v/60;$('#op').textContent=PAR.k.toFixed(1)+'\u00d7'}
 $('#rP').oninput=()=>{applyParStrength();parKick();saveCfg()};
 applyParStrength();syncDepth();applyDepth();applyPar();

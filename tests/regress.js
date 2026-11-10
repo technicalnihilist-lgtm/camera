@@ -1348,6 +1348,72 @@ const check = (name, ok, detail) => {
     qswap.n1 === qswap.n0 + 1, (qswap.n1 - qswap.n0) + ' photo(s) saved');
   await p22.close();
 
+  // The six on/off rows in Settings and Capture engine showed their state only as
+  // a colour on an empty <i class="sw">, which is decoration: the <button> itself
+  // carried no state, so a screen reader announced "Water sound, button" whether
+  // the sound was on or off. The three top-bar toggles have always maintained
+  // aria-pressed; every switch row must now report the state that is actually in
+  // effect, from a boot default, a restored preference and a tap alike.
+  const SWITCHES = ['#snd', '#t4d', '#eDepth', '#eBurst', '#eSharp', '#eAF'];
+  const p25 = await browser.newPage();
+  await p25.setViewport({ width: 400, height: 840 });
+  p25.on('pageerror', e => errors.push('pageerror(switches): ' + e.message));
+  p25.on('console', m => { if (m.type() === 'error') errors.push('console(switches): ' + m.text().slice(0, 160)); });
+  // a first run: no saved preference to restore over the authored defaults
+  await p25.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch (e) {} });
+  await p25.goto(URL, { waitUntil: 'load' });
+  await wait(1500);
+  const swBoot = await p25.evaluate(ids => ids.map(id => {
+    const b = document.querySelector(id), w = b.querySelector('.sw');
+    return { id, pressed: b.getAttribute('aria-pressed'), on: w.classList.contains('on') };
+  }), SWITCHES);
+  check('every switch row reports its state at boot',
+    swBoot.every(s => s.pressed === 'true' && s.on === true),
+    swBoot.map(s => s.id + '=' + s.pressed + (s.on ? '' : '(class off)')).join(' '));
+  const swTap = await p25.evaluate(ids => {
+    const out = [];
+    for (const id of ids) {
+      const b = document.querySelector(id);
+      b.click();
+      const off = { id, pressed: b.getAttribute('aria-pressed'), on: b.querySelector('.sw').classList.contains('on') };
+      b.click();
+      const back = { id, pressed: b.getAttribute('aria-pressed'), on: b.querySelector('.sw').classList.contains('on') };
+      out.push({ off, back });
+    }
+    return out;
+  }, SWITCHES);
+  check('a switch row reports the state a tap puts it in',
+    swTap.every(r => r.off.pressed === 'false' && r.off.on === false &&
+      r.back.pressed === 'true' && r.back.on === true),
+    swTap.map(r => r.off.id + ' off=' + r.off.pressed + ' back=' + r.back.pressed).join(' '));
+  check('the switch class and the reported state never disagree',
+    swTap.every(r => (r.off.pressed === 'true') === r.off.on && (r.back.pressed === 'true') === r.back.on));
+  await p25.close();
+
+  // ...and it must report the state *in effect*, not the authored one: under
+  // reduced motion the page turns 4D parallax off before the first frame, so its
+  // row has to read off while the others read on.
+  const p26 = await browser.newPage();
+  await p26.setViewport({ width: 400, height: 840 });
+  p26.on('pageerror', e => errors.push('pageerror(reduced): ' + e.message));
+  p26.on('console', m => { if (m.type() === 'error') errors.push('console(reduced): ' + m.text().slice(0, 160)); });
+  await p26.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  // a first run: no saved preference to restore over the reduced-motion default
+  await p26.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch (e) {} });
+  await p26.goto(URL, { waitUntil: 'load' });
+  await wait(1500);
+  const swReduced = await p26.evaluate(() => {
+    const g = id => document.querySelector(id).getAttribute('aria-pressed');
+    return { par: g('#t4d'), depth: g('#eDepth'), snd: g('#snd'),
+      parOn: document.querySelector('#app').classList.contains('par') };
+  });
+  check('a switch row under reduced motion reports the state in effect',
+    swReduced.par === 'false' && swReduced.parOn === false &&
+    swReduced.depth === 'true' && swReduced.snd === 'true',
+    '4D=' + swReduced.par + ' (page par ' + swReduced.parOn + '), depth=' + swReduced.depth +
+    ', sound=' + swReduced.snd);
+  await p26.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
