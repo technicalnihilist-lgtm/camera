@@ -645,6 +645,35 @@ function gum(c){
   if(!lg)return Promise.reject(Object.assign(new Error('no camera api'),{name:'NotSupportedError'}));
   return new Promise((res,rej)=>lg.call(navigator,c,res,rej))}
 function hasGum(){return !!((navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)||navigator.getUserMedia||navigator.webkitGetUserMedia||navigator.mozGetUserMedia)}
+/* getUserMedia() for the preview was the last await on the camera path with no
+   natural end, and it holds the whole start: `start()` takes the gate down on a
+   rejection and fades the preview in on a stream, but a request that neither
+   answers nor fails leaves it in between for ever. That is the ordinary shape
+   of a permission prompt nobody answered — dismissed by clicking beside it, or
+   a WebView whose permission request is dropped when its activity is torn down
+   — and nothing else retries: no start() is called while there is no stream to
+   resume, the gate is still hidden because nothing failed, and the shutter only
+   ever answers "Camera is not ready yet". Measured against a getUserMedia that
+   never settles: 12 s in, the gate is still down, `stream` false, `startPending`
+   still set and `videoWidth` 0, and the app stays a black preview until it is
+   restarted. Bound the wait exactly as the microphone, play(), takePhoto and
+   the three image waits are bounded: a granted camera that has not opened in
+   8 s is a wedged camera service (a working start resolves in tens to hundreds
+   of ms), while a prompt on screen is a person being asked, which gets 20 s. A
+   stream that arrives after the bound is stopped on arrival, so giving up can
+   never leave the sensor open, and the timeout takes the failure path the app
+   already has — the gate, with its retry button, instead of a black preview. */
+const CAM_WAIT=8000,CAM_ASK_WAIT=20000;
+function camState(){try{
+    const q=navigator.permissions&&navigator.permissions.query({name:'camera'});
+    if(q&&q.then)return q.then(s=>(s&&s.state)||'',()=>'');
+  }catch(e){}
+  return Promise.resolve('')}
+async function camAsk(ask){
+  const st=await camState();
+  const p=ask();let t=0;
+  return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>{p.then(stopTracks,()=>{});no(Object.assign(new Error('camera timeout'),{name:'TimeoutError'}))},st==='granted'?CAM_WAIT:CAM_ASK_WAIT)})])
+    .then(s=>{clearTimeout(t);return s},e=>{clearTimeout(t);throw e})}
 function openTop(){const u=location.href;let w=null;
   try{w=window.open(u,'_blank');if(w)w.opener=null}catch(e){}
   if(w)return toast('Opened in a new tab — allow the camera there');
@@ -686,8 +715,8 @@ async function start(){
   const ask=()=>{const P=QP[E.q];return gum({video:{facingMode:{ideal:S.face},width:{ideal:P.w},height:{ideal:P.h},frameRate:{ideal:30}},audio:false})};
   startPending=id;                          /* the device has not answered yet */
   try{let s;
-    try{s=await ask()}catch(e){const n=e&&e.name;
-      if(old&&(n==='NotReadableError'||n==='AbortError'||n==='TrackStartError')){releaseOld();s=await ask()}else throw e}
+    try{s=await camAsk(ask)}catch(e){const n=e&&e.name;
+      if(old&&(n==='NotReadableError'||n==='AbortError'||n==='TrackStartError')){releaseOld();s=await camAsk(ask)}else throw e}
     if(id!==startId){s.getTracks().forEach(t=>t.stop());releaseOld();return}
     stream=s;
     v.srcObject=s;releaseOld();await imgWait(v.play(),PREVIEW_WAIT).catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
@@ -703,7 +732,7 @@ async function start(){
     if(n==='SecurityError'||n==='NotSupportedError'){const s=secInfo();return gate(s.msg,s.label,s.action)}
     if(n==='NotAllowedError'&&!isFramed())return gate('Camera permission was denied. Tap the lock or camera icon in the address bar, allow Camera, then tap the button below.');
     if(n==='NotAllowedError'&&isFramed()&&openable())return gate('Camera permission was refused inside this preview frame. Open the app in its own tab with the button below, then allow the camera.',  'Open in a new tab','open');
-    const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).'}[n]||('Camera could not start ('+n+').');gate(m)}
+    const m={NotAllowedError:'Camera is blocked here (NotAllowedError). This preview cannot ask for camera access. Open the downloaded HTML file in Chrome or Safari, or tap the lock icon in the address bar and allow Camera.',NotFoundError:'No camera found on this device (NotFoundError).',NotReadableError:'Another app is using the camera (NotReadableError). Close it and try again.',OverconstrainedError:'This camera cannot provide the requested video mode (OverconstrainedError).',TimeoutError:'The camera did not answer in time. Tap below to try again.'}[n]||('Camera could not start ('+n+').');gate(m)}
   finally{if(startPending===id)startPending=0}}
 /* Nothing ever released the camera when the page was hidden. The Android
    wrapper keeps the WebView process alive behind the home screen and its

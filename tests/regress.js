@@ -964,7 +964,12 @@ const check = (name, ok, detail) => {
       await new Promise(k => setTimeout(k, 100));
       if (stream && v.videoWidth > 0) break;
     }
-    await new Promise(k => setTimeout(k, 800));
+    // the fade-in is a 0.6 s CSS transition that only starts once play() has
+    // resolved, and videoWidth is set before that — wait for it, bounded
+    for (let i = 0; i < 40; i++) {
+      if (+getComputedStyle(v).opacity > 0.9) break;
+      await new Promise(k => setTimeout(k, 100));
+    }
     return { live: !!stream, w: v.videoWidth, op: +getComputedStyle(v).opacity, gate: document.querySelector('#gate').hidden };
   });
   check('a hide while the camera is still starting does not leave the app without one',
@@ -1114,6 +1119,9 @@ const check = (name, ok, detail) => {
     wedgedMic.asked + ' late stream(s), ' + wedgedMic.late + ' stopped');
   const micTake = await p16.evaluate(async () => {
     const w = ms => new Promise(k => setTimeout(k, ms));
+    // the recorder hands over its first 250 ms slice when it is due; a take
+    // stopped before that has nothing to save, which is not what this checks
+    for (let i = 0; i < 25 && !chunks.length; i++) await w(100);
     document.querySelector('#shut').click();      // stop the take
     for (let i = 0; i < 40 && rec; i++) await w(100);
     await w(400);
@@ -1474,6 +1482,74 @@ const check = (name, ok, detail) => {
     '4D=' + swReduced.par + ' (page par ' + swReduced.parOn + '), depth=' + swReduced.depth +
     ', sound=' + swReduced.snd);
   await p26.close();
+
+  // getUserMedia() for the preview was the last await on the camera path with no
+  // natural end, and it holds the whole start: a request that neither answers
+  // nor fails left the app on a black preview for ever — the gate stays down
+  // because nothing failed, no start() is ever retried, and the shutter only
+  // says "Camera is not ready yet". That is what an unanswered permission
+  // prompt looks like, and a WebView whose request is dropped with its activity.
+  // The wait is bounded now (8 s for a granted camera, 20 s for a prompt), the
+  // timeout takes the gate's failure path, and a stream that arrives afterwards
+  // is stopped on arrival.
+  const p27 = await browser.newPage();
+  await p27.setViewport({ width: 400, height: 840 });
+  const hangErrors = [];
+  p27.on('pageerror', e => hangErrors.push('pageerror(hang): ' + e.message));
+  p27.on('console', m => { if (m.type() === 'error') hangErrors.push('console(hang): ' + m.text().slice(0, 160)); });
+  await p27.evaluateOnNewDocument(() => {
+    window.__camAsks = 0; window.__lateStopped = 0; window.__hang = true; window.__late = null;
+    const orig = MediaDevices.prototype.getUserMedia;
+    MediaDevices.prototype.getUserMedia = function (c) {
+      if (window.__hang && c && c.video) {
+        // a camera that is asked for and never answers
+        window.__camAsks++;
+        return new Promise(ok => {
+          window.__late = () => ok({
+            getTracks: () => [{ stop() { window.__lateStopped++; } }],
+            getVideoTracks: () => [], getAudioTracks: () => [],
+          });
+        });
+      }
+      return orig.call(this, c);
+    };
+    navigator.permissions.query = () => Promise.resolve({ state: 'granted' });
+  });
+  await p27.goto(URL, { waitUntil: 'load' });
+  await wait(3000);
+  const hangEarly = await p27.evaluate(() => ({
+    gate: document.querySelector('#gate').hidden, pending: startPending, asks: window.__camAsks,
+  }));
+  await wait(6500);
+  const hangLate = await p27.evaluate(() => ({
+    gate: document.querySelector('#gate').hidden, msg: document.querySelector('#gm').textContent,
+    pending: startPending, asks: window.__camAsks,
+  }));
+  check('a camera request that never answers cannot leave the app on a black preview',
+    hangEarly.gate === true && hangEarly.pending !== 0 && hangLate.gate === false &&
+    /did not answer/i.test(hangLate.msg) && hangLate.pending === 0,
+    'pending ' + hangEarly.pending + ' at 3 s, gate hidden ' + hangLate.gate + ' at 9.5 s, ' +
+    JSON.stringify(hangLate.msg.slice(0, 40)));
+  const hangBack = await p27.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    window.__hang = false;
+    if (window.__late) window.__late();          // the prompt is answered after the bound
+    await w(300);
+    document.querySelector('#gb').click();       // the gate's own retry
+    for (let i = 0; i < 60; i++) { await w(100); if (stream && v.videoWidth > 0) break; }
+    // the fade-in is a CSS transition that starts once play() has resolved
+    for (let i = 0; i < 40; i++) { if (+getComputedStyle(v).opacity > 0.9) break; await w(100); }
+    return { gate: document.querySelector('#gate').hidden, vw: v.videoWidth,
+      op: +getComputedStyle(v).opacity, late: window.__lateStopped };
+  });
+  check('the gate brings the camera back after a request that timed out',
+    hangBack.gate === true && hangBack.vw > 0 && hangBack.op > 0.9,
+    hangBack.vw + 'px, opacity ' + hangBack.op);
+  check('a camera stream that arrives after the bound is stopped',
+    hangBack.late >= 1, hangBack.late + ' late stream(s) stopped');
+  check('no errors from the camera request that never answered',
+    hangErrors.length === 0, hangErrors.slice(0, 2).join(' | '));
+  await p27.close();
 
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
