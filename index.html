@@ -1254,7 +1254,31 @@ function makePipe(){
   if(!ctx||!c.captureStream)return null;
   let cs;try{cs=c.captureStream(30)}catch(e){return null}
   let live=true,raf=0,last=performance.now();
-  const draw=()=>{const q=cropRect();if(!q)return;drawCrop(ctx,c,q,w,h,S.face==='user');
+  /* The canvas the take is captured from was written twice per frame whenever
+     the depth effect was on: drawCrop() painted the frame, then depthPass()
+     painted the blurred layer over it. A 2D canvas with a live captureStream()
+     hands the pipeline a frame on every write, so a depth-on take fed it two
+     frames a tick where it needs one, and the frames the encoder could not
+     take queued up unread at 8.9 MB apiece. Measured on the 1028 × 2160 pipe
+     the Max preset makes from a 4K sensor: with depth on the browser's
+     resident size climbed ~600 MB/s and it was killed inside a second, while
+     the same take with depth off — one write a frame — settled at 1.26 GB and
+     ran to the end. The layer is composed on a scratch surface and blitted
+     into the captured canvas once per frame instead, so what the encoder is
+     handed is identical (a 1:1 copy of the same opaque composite, no resample)
+     and the pipeline sees one frame a tick. The scratch surface is pipe-sized,
+     reused across frames, and let go with the pipe; a device where it cannot
+     be created falls back to the two-write path unchanged. */
+  let offC=null,offX=null;
+  const off=(W,H)=>{if(!offC){try{offC=document.createElement('canvas')}catch(e){return null}}
+    if(offC.width!==W||offC.height!==H){offC.width=W;offC.height=H;offX=null}
+    if(!offX){try{offX=offC.getContext('2d',{alpha:false})}catch(e){offX=null}}
+    return offX?offC:null};
+  const draw=()=>{const q=cropRect();if(!q)return;
+    if(D.depth){const o=off(w,h);
+      if(o){drawCrop(offX,o,q,w,h,S.face==='user');try{depthPass(offX,o,D.k)}catch(e){}
+        ctx.drawImage(o,0,0);return}}
+    drawCrop(ctx,c,q,w,h,S.face==='user');
     if(D.depth){try{depthPass(ctx,c,D.k)}catch(e){}}};
   draw();
   /* the capture stream asks for 30 fps, so drawing faster than that only burns
@@ -1263,7 +1287,8 @@ function makePipe(){
   const loop=t=>{if(!live)return;if(t-last>=STEP){last=t;draw()}raf=requestAnimationFrame(loop)};
   raf=requestAnimationFrame(loop);
   return{stream:cs,poster:()=>posterFrom(c),
-    stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop())}}}
+    stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop());
+      if(offC){offC.width=offC.height=0;offC=null;offX=null}}}}
 
 /* MediaRecorder.stop() marks the recorder inactive and posts a stop task, but
    nothing guarantees that task runs: a wedged media pipeline in a WebView can
