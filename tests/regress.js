@@ -260,6 +260,40 @@ const check = (name, ok, detail) => {
     closedView.vmEmpty && closedView.hidden && closedView.paused === true && closedView.src === '',
     'src ' + (closedView.src ? 'kept' : 'released') + ', paused ' + closedView.paused);
 
+  // A MediaRecorder that fails fires `error`, then the rest of the take's data
+  // and then `stop` — the take is one flush from over, not over. The handler
+  // answered the error alone: cleanupRec() emptied the chunk list and cleared
+  // `rec`, so the flush that followed finalised nothing and a take that hit an
+  // encoder error lost everything it had already recorded. Ending the take on
+  // the error lets the recorder flush and the ordinary stop path save it.
+  await page.click('#shut'); await wait(2000);
+  const recErr = await page.evaluate(() => new Promise(res => {
+    const rr = rec, n0 = items.length;
+    if (!rr) return res({ noRec: true });
+    rr.dispatchEvent(new Event('error'));
+    const t0 = performance.now();
+    const tick = () => {
+      if (items.length > n0) {
+        const it = items[items.length - 1], v = document.createElement('video');
+        v.muted = true; v.src = it.u;
+        const done = () => res({ ms: Math.round(performance.now() - t0), t: it.t,
+          w: v.videoWidth, d: v.duration, rec: !!rec,
+          recClass: document.querySelector('#app').classList.contains('rec') });
+        v.onloadedmetadata = done; setTimeout(done, 5000); return;
+      }
+      if (performance.now() - t0 > 9000) return res({ added: false, rec: !!rec,
+        recClass: document.querySelector('#app').classList.contains('rec') });
+      setTimeout(tick, 100);
+    };
+    tick();
+  }));
+  check('a take that fails mid-way is saved, not thrown away',
+    recErr.t === 'v' && recErr.w > 0 && recErr.d > 0 &&
+    recErr.rec === false && recErr.recClass === false,
+    'clip ' + (recErr.ms || '?') + ' ms after the error, ' + (recErr.w || 0) + 'px, ' +
+    (recErr.d ? recErr.d.toFixed(1) + 's' : 'no duration') +
+    ', recording state off ' + (recErr.recClass === false));
+
   // native save through the Android bridge (only wired when window.AndroidCam exists)
   const p2 = await browser.newPage();
   await p2.setViewport({ width: 400, height: 840 });

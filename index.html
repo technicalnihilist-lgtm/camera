@@ -1359,6 +1359,34 @@ async function finishRec(rr){if(rec!==rr)return;
 function stopRec(){const rr=rec;if(!rr)return;
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
   try{rr.stop()}catch(e){finishRec(rr)}}
+/* A MediaRecorder that fails fires `error`, then `dataavailable` with the rest
+   of the take and then `stop` — the take is not over when the error arrives,
+   it is one flush from over. The handler answered the error alone: it called
+   `cleanupRec()` straight away, which emptied `chunks` and cleared `rec`, so
+   the flush that followed found nothing to do — its slice was pushed into an
+   array nobody would read again and its `stop` finalised nothing, because
+   `finishRec()` bails when `rec` is no longer its recorder. A take that hit an
+   encoder error at second 41 therefore lost the 40 s it had already recorded.
+   Measured here on a 2 s Standard take with the error forced: `items` stayed
+   empty, `rec` false, and the take's only chunk left dangling in `chunks`.
+   Reading the chunks that exist at the error is not the answer either — the
+   mp4 muxer this build prefers buffers its fragments and hands them over on
+   the way out, so a blob built at the error holds a header and no frames and
+   decodes to 0 × 0. End the take instead: `stop()` makes the recorder flush
+   what it is holding, and the ordinary stop path finalises it, so what the
+   user gets is the clip up to the error. A recorder that is already dead
+   throws on `stop()` (or stays silent) and falls back to the same finalise
+   with whatever exists, which is the "Nothing was recorded" answer the app
+   already gives. The bound is shorter than a normal stop's: an errored
+   pipeline is the one that may swallow the event, and the shutter should not
+   sit in its recording state for two seconds over a take that has failed.
+   Nothing on screen changes — the same message, and the shutter leaves the
+   recording state exactly as it does on an ordinary stop. */
+const REC_ERR_WAIT=1200;
+function recoverRec(rr){if(rec!==rr)return;
+  clearTimeout(recWatch);
+  recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},REC_ERR_WAIT);
+  try{rr.stop()}catch(e){finishRec(rr)}}
 
 /* The take's microphone request is the one await in the recording path with no
    natural end, and the only one that holds the whole app. `busy` is set before
@@ -1414,7 +1442,7 @@ async function toggleRec(){
     const rr=new MediaRecorder(st,Object.assign(mt?{mimeType:mt}:{},{videoBitsPerSecond:QP[E.q].vbr,audioBitsPerSecond:192000}));
     rec=rr;
     rr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-    rr.onerror=()=>{toast('Recording stopped unexpectedly');cleanupRec()};
+    rr.onerror=()=>{toast('Recording stopped unexpectedly');recoverRec(rr)};
     rr.onstop=()=>finishRec(rr);
     rr.start(250);
     app.classList.add('rec');
