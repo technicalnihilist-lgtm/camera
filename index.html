@@ -750,10 +750,27 @@ function dropCam(){
   try{v.srcObject=null}catch(e){}
   v.style.opacity=0;
 }
+/* A photo capture owns the camera from the moment it is asked for, and the
+   countdown in front of it is part of that capture. The handler only ever
+   protected the capture itself, so a hide during the countdown — the ordinary
+   "set the timer, tap the shutter, put the phone down" — released the camera
+   underneath it and left the countdown running: `#shut` went on to call
+   snapShot() with `v.videoWidth` 0 and no stream, and the shot the user had
+   already asked for came back as "Camera is not ready yet" on a page nobody
+   could see. Measured against the fake device: timer at 3 s, shutter tapped,
+   page hidden 300 ms later — 0 photos, `stream` false, and the toast the only
+   trace of it. A countdown in photo or square mode now holds the camera the
+   same way a capture does and lets go on its way out (see `#shut`), so the
+   timed shot is taken and saved while the page is hidden. A countdown in video
+   mode is left alone: the take it leads to is drawn frame by frame from a
+   requestAnimationFrame loop, which a hidden page never runs, so recording one
+   off screen would save a single frozen frame — releasing the camera there
+   still ends in the same "Camera is not ready yet" the app already gives, with
+   nothing recorded. */
 addEventListener('visibilitychange',()=>{
   if(document.hidden){
     if(rec)return;
-    if(capturing){camHide=true;return}     /* the shot in flight lets go on its way out */
+    if(capturing||(counting&&S.mode!=='video')){camHide=true;return}  /* the shot in flight — or the countdown that leads to one — lets go on its way out */
     dropCam();
   }else{camHide=false;if(camPaused){camPaused=false;start()}}
 });
@@ -1317,13 +1334,20 @@ async function toggleRec(){
   finally{busy=false}
 }
 
+/* A countdown that is cancelled — or a shutter tap that finds no frame to
+   capture — never reaches snap(), which is where a hide during the countdown
+   hands the camera back (see the visibility handler). The camera it was holding
+   for that countdown is released here instead, so a countdown that does not end
+   in a capture can never pin the sensor behind a hidden page: the guard is the
+   same `camHide` flag, so a capture that did run has already cleared it and
+   this is a no-op. */
 $('#shut').onclick=async()=>{
   if(!stream&&native)return pickNative();
   if(S.mode==='video')return toggleRec();
   if(busy)return cancelCd();
   busy=true;
   try{if(!v.videoWidth)return toast('Camera is not ready yet');if(S.tm&&!(await countdown()))return;await snap()}
-  finally{busy=false}};
+  finally{busy=false;if(document.hidden&&camHide&&!capturing){camHide=false;dropCam()}}};
 
 /* ---------- viewer ---------- */
 /* The viewer swaps #vm's markup on every prev/next tap, and the outgoing <video>

@@ -888,6 +888,44 @@ const check = (name, ok, detail) => {
   });
   check('and taken up again when the page comes back',
     hideShotBack.live && hideShotBack.w > 0, hideShotBack.w + 'px');
+  // The countdown in front of a photo capture is part of that capture, and the
+  // hide handler only protected the capture itself: a hide during the countdown
+  // released the camera and left the countdown running, so the timed shot the
+  // user had already asked for came back as "Camera is not ready yet" on a page
+  // nobody could see — 0 photos. The countdown now holds the camera the same
+  // way a capture does and lets go on its way out.
+  const timedHide = await p23.evaluate(async () => {
+    document.querySelector('#bE').click(); await new Promise(k => setTimeout(k, 700));
+    document.querySelector('#eBurst').click();          // one frame per shot, so the capture is quick
+    document.querySelector('#edone').click(); await new Promise(k => setTimeout(k, 900));
+    const before = items.length;
+    S.tm = 1;                                          // the shortest tick the timer can run
+    document.querySelector('#shut').click();
+    await new Promise(k => setTimeout(k, 250));
+    const wasCounting = counting && busy;
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    const kept = stream !== null && v.srcObject !== null;
+    for (let i = 0; i < 120; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (!busy && !capturing && !counting) break;
+    }
+    const saved = items.length - before;
+    const released = stream === null && v.srcObject === null && camPaused;
+    S.tm = 0;
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    for (let i = 0; i < 40; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (stream && v.videoWidth > 0) break;
+    }
+    return { wasCounting, kept, saved, released, back: !!stream };
+  });
+  check('a hide during the countdown still takes the timed photo',
+    timedHide.wasCounting && timedHide.kept && timedHide.saved === 1,
+    'counting ' + timedHide.wasCounting + ', camera kept ' + timedHide.kept + ', saved ' + timedHide.saved);
+  check('and the countdown lets go of the camera once the shot is in',
+    timedHide.released && timedHide.back, 'released ' + timedHide.released + ', back ' + timedHide.back);
   check('no errors from the hidden capture', shotErrors.length === 0, shotErrors.slice(0, 2).join(' | '));
   await p23.close();
 
