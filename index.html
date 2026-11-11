@@ -1046,6 +1046,16 @@ const yieldTask=(()=>{try{const mc=new MessageChannel(),q=[];
     mc.port1.onmessage=()=>{const r=q.shift();if(r)r()};
     return()=>new Promise(r=>{q.push(r);mc.port2.postMessage(0)})}
   catch(e){return()=>sleep(0)}})();
+/* A yieldTask() hands the thread back, which is enough to let a frame *through*
+   but not to guarantee that one has been painted: a message task can be followed
+   immediately by more work. Where the screen itself has to catch up first — the
+   take being put down before the poster is encoded — wait for a frame the way
+   the intro does: requestAnimationFrame() fires at the start of a frame's
+   rendering steps, so the callback in the *next* frame means the first one has
+   been composited. A hidden page runs no frames at all, so the wait is skipped
+   there instead of never ending. */
+const nextPaint=()=>document.hidden?Promise.resolve():
+  new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
 /* The convolution itself is the largest block detail boost still has left: it
    touches every pixel of the frame and runs on the shutter's critical path, so
    the user waits for it. It read each pixel's four neighbours out of the row
@@ -1204,21 +1214,38 @@ function cancelCd(){if(counting&&!cdCancel){cdCancel=true;toast('Timer cancelled
    recorded clip. Downscale into one reused scratch surface first (long edge
    1080): the same picture on screen, ~4× less readback and encode work, and a
    far smaller string per clip. */
+/* The poster is two jobs of very different cost. Copying the frame into the
+   scratch surface is a ~4 ms downscale; turning it into a JPEG is ~180 ms of
+   main thread on the 514 × 1080 this app produces, because the encode is
+   synchronous. They were one call, made from `finishRec()` *before* the take was
+   put down, so the shutter stayed in the recording state and the red pill stayed
+   on screen for the whole encode: tapping stop measured 308 ms to the UI leaving
+   the recording state on the fake device, and not one frame was painted in
+   between — the poster was encoded, then the take was ended, then the clip
+   appeared, all in the same frame. The frame is grabbed now (cheap, while the
+   recording canvas still holds the take's last frame) and the encode runs once
+   the take is down and a frame has painted (see `finishRec()`). The picture is
+   the same picture, made from the same frame by the same code. */
 const pScratch=document.createElement('canvas');
-function posterFrom(c){
+function posterGrab(c){
   try{
     const s=Math.min(1,1080/Math.max(c.width,c.height));
     const w=Math.max(2,Math.round(c.width*s)),h=Math.max(2,Math.round(c.height*s));
     if(pScratch.width!==w||pScratch.height!==h){pScratch.width=w;pScratch.height=h}
     const x=pScratch.getContext('2d');
-    if(!x)return'';
+    if(!x)return false;
     x.setTransform(1,0,0,1,0,0);x.globalAlpha=1;x.globalCompositeOperation='source-over';
     x.imageSmoothingEnabled=true;
     try{x.imageSmoothingQuality='high'}catch(e){}
     x.drawImage(c,0,0,w,h);
-    return pScratch.toDataURL('image/jpeg',.72);
-  }catch(e){return''}
+    return true;
+  }catch(e){return false}
 }
+/* A hidden page zeroes pScratch, and toDataURL() on a 0 × 0 canvas returns
+   "data:," rather than throwing — a truthy string that would put a broken image
+   in the thumb — so an encode of a surface that is gone is no poster at all. */
+function posterEncode(){try{return pScratch.width&&pScratch.height?pScratch.toDataURL('image/jpeg',.72):''}catch(e){return''}}
+function posterFrom(c){return posterGrab(c)?posterEncode():''}
 /* dScratch (the depth pass) and pScratch (the poster) are module-level surfaces
    like stillC and pipeC, but unlike them they were never released: a 12 MP
    frame leaves ~5 MB of RGBA in dScratch and a 1080-long-edge poster ~6 MB in
@@ -1286,7 +1313,7 @@ function makePipe(){
   const STEP=1000/30-1;
   const loop=t=>{if(!live)return;if(t-last>=STEP){last=t;draw()}raf=requestAnimationFrame(loop)};
   raf=requestAnimationFrame(loop);
-  return{stream:cs,poster:()=>posterFrom(c),
+  return{stream:cs,grab:()=>posterGrab(c),
     stop:()=>{live=false;cancelAnimationFrame(raf);cs.getTracks().forEach(t=>t.stop());
       if(offC){offC.width=offC.height=0;offC=null;offX=null}}}}
 
@@ -1310,14 +1337,25 @@ function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rt
   if(micS){micS.getTracks().forEach(t=>t.stop());micS=null}
   chunks.length=0;
   rec=null}
-function finishRec(rr){if(rec!==rr)return;
+/* A take ends in the order the user is waiting on now: the frame for the poster
+   is copied off the recording canvas, the blob is built from the chunks, and the
+   take is put down (`cleanupRec()` — the shutter back to its round state, the
+   red pill gone, the pipe and the microphone released). Only then is the poster
+   encoded, one painted frame later, so the tap is answered on screen before the
+   ~180 ms of JPEG work runs instead of after it. `chunks` is still the take's
+   own array when the blob is built and is emptied by `cleanupRec()` afterwards,
+   and the frame is already in pScratch, so nothing here depends on the take
+   still being alive. A page hidden at that moment runs no frames at all, so the
+   wait for one is skipped rather than waited out. */
+async function finishRec(rr){if(rec!==rr)return;
   const type=(rr.mimeType||'video/webm').split(';')[0];
-  const poster=pipe?pipe.poster():'';
+  const grabbed=pipe?pipe.grab():false;
   const ok=chunks.length&&chunks.some(c=>c.size);
   const blob=ok?new Blob(chunks,{type:type}):null;
   cleanupRec();
   if(!blob)return toast('Nothing was recorded');
-  add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:poster})}
+  if(grabbed)await nextPaint();
+  add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:grabbed?posterEncode():''})}
 function stopRec(){const rr=rec;if(!rr)return;
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
   try{rr.stop()}catch(e){finishRec(rr)}}

@@ -177,7 +177,38 @@ const check = (name, ok, detail) => {
   await page.click('#shut'); await wait(2500);
   const rec = await page.evaluate(() => document.querySelector('#app').classList.contains('rec'));
   check('recording starts', rec === true);
-  await page.click('#shut'); await wait(2200);
+  // The stop tap must be answered on screen before the poster is encoded. The
+  // take is put down (shutter back to its round state, red pill gone, pipe and
+  // microphone released) as soon as the recorder's stop event arrives, that
+  // frame paints, and only then does the JPEG encode for the poster run. The
+  // old order encoded the poster first, so the recording state stayed on screen
+  // for the whole encode and not one frame was painted between the take ending
+  // and the clip appearing. This reads the two events off the page: when #app
+  // loses its `rec` class, and when the clip reaches the gallery.
+  const stopTap = await page.evaluate(() => new Promise(res => {
+    const app = document.querySelector('#app'), n0 = items.length;
+    let recOff = -1, frames = 0, done = false;
+    const t0 = performance.now();
+    const fin = () => {
+      if (done) return; done = true; mo.disconnect();
+      res({ recOff: Math.round(recOff), frames, added: items.length > n0,
+        poster: ((items[items.length - 1] || {}).p || '').length });
+    };
+    const tick = () => { if (items.length > n0) return fin(); frames++; requestAnimationFrame(tick); };
+    const mo = new MutationObserver(() => {
+      if (recOff >= 0 || app.classList.contains('rec')) return;
+      recOff = performance.now() - t0;
+      requestAnimationFrame(tick);
+    });
+    mo.observe(app, { attributes: true, attributeFilter: ['class'] });
+    document.querySelector('#shut').click();
+    setTimeout(fin, 12000);
+  }));
+  check('the take is put down before the poster is encoded',
+    stopTap.added && stopTap.recOff >= 0 && stopTap.frames >= 1,
+    'recording state off at ' + stopTap.recOff + ' ms, ' + stopTap.frames +
+    ' frame(s) painted before the clip appeared, poster ' + stopTap.poster + ' chars');
+  await wait(200);
   // the poster is only a placeholder until the clip's first frame decodes, so
   // note how big it is before the viewer can show that frame
   const posterLen = await page.evaluate(() => ((items[items.length - 1] || {}).p || '').length);
