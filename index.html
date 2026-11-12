@@ -864,7 +864,7 @@ $('#gn').onclick=()=>{native=true;$('#gate').hidden=true;gatePick=true;pickNativ
 fi.onchange=()=>{const f=fi.files&&fi.files[0];if(!f)return restoreGate();gatePick=false;
   const u=URL.createObjectURL(f),isV=f.type.startsWith('video/');
   const ext=(f.name.split('.').pop()||(isV?'mp4':'jpg')).toLowerCase();
-  add({t:isV?'v':'i',u,x:ext,p:''});toast(isV?'Video saved to gallery':'Photo saved to gallery')};
+  add({t:isV?'v':'i',u,x:ext,p:'',n:f.size});toast(isV?'Video saved to gallery':'Photo saved to gallery')};
 $('#gb').onclick=async()=>{if(gbAction==='open')return openTop();await start();if(!$('#gate').hidden)toast('Still blocked by the browser')};
 $('#flip').onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to flip camera':'Wait for the timer to finish');
   S.face=S.face==='user'?'environment':'user';flipR+=180;$('#flip svg').style.transform=`rotate(${flipR}deg)`;
@@ -916,11 +916,26 @@ function drawCrop(ctx,c,r,w,h,mirror){drawSrc(ctx,v,r,w,h,mirror)}
    Nothing ever revoked them, so a long session grew without bound until the
    WebView ran out of memory. Keep the last MAX_ITEMS and release the rest. */
 const MAX_ITEMS=30;
+/* A count of captures is not a memory bound, and 30 was sized for the frame
+   this app used to take: ~90 MB of JPEG from an 8 MP sensor. The quality row
+   goes to 64 MP at q .98, where one photo is 15–25 MB and a Max-quality take
+   is ~210 MB a minute, so thirty items pin well over half a gigabyte of blobs
+   in a WebView that is killed long before it — the very out-of-memory the
+   count cap was added to prevent, just reached by size instead of by number.
+   Every capture carries its own byte size now and the list is bounded by bytes
+   as well as by count, oldest first exactly as before. The newest capture is
+   never the one dropped (the shutter always shows what was just taken, even
+   when that single item is bigger than the whole budget), and on an ordinary
+   device the byte budget is never reached — thirty 8 MP shots still fit — so
+   what is kept and what is released is unchanged there. */
+const MAX_ITEM_BYTES=96e6;
+let itemBytes=0;
 function release(it){if(it&&typeof it.u==='string'&&it.u.lastIndexOf('blob:',0)===0){try{URL.revokeObjectURL(it.u)}catch(e){}}}
-function add(it){items.push(it);
+function add(it){it.n=Math.max(0,+it.n||0);itemBytes+=it.n;items.push(it);
   /* never evict while the viewer is showing the list (the open <video> would
      lose its source); the shutter is unreachable then anyway */
-  while(items.length>MAX_ITEMS&&openS!==$('#view')){release(items.shift());if(vi>0)vi--}
+  while((items.length>MAX_ITEMS||itemBytes>MAX_ITEM_BYTES)&&items.length>1&&openS!==$('#view')){
+    const old=items.shift();itemBytes-=old.n||0;release(old);if(vi>0)vi--}
   renderThumb();spr($('#thumb'),{s:.5},{s:1})}
 function renderThumb(){const it=items[items.length-1];
   $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
@@ -1183,7 +1198,7 @@ async function snapShot(){
   if(D.depth){try{await sleep(0);depthPass(c.getContext('2d'),c,D.k)}catch(e){}}
   const b=await toJpg(c,QP[E.q].jpg).catch(()=>null);
   if(!b)return toast('Could not save the photo');
-  add({t:'i',u:URL.createObjectURL(b),x:'jpg'});
+  add({t:'i',u:URL.createObjectURL(b),x:'jpg',n:b.size});
   toast('Saved '+w+' × '+h+' · '+(w*h/1e6).toFixed(1)+' MP'+(nat?' · sensor':'')+(got>1?' · best of '+got:'')+(boosted?' · enhanced':''))}
 /* The countdown's 1 s tick was a plain `sleep`, which cannot be interrupted, so
    a cancel only took effect when the tick happened to run out: the shutter, the
@@ -1355,7 +1370,7 @@ async function finishRec(rr){if(rec!==rr)return;
   cleanupRec();
   if(!blob)return toast('Nothing was recorded');
   if(grabbed)await nextPaint();
-  add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:grabbed?posterEncode():''})}
+  add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:grabbed?posterEncode():'',n:blob.size})}
 function stopRec(){const rr=rec;if(!rr)return;
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
   try{rr.stop()}catch(e){finishRec(rr)}}

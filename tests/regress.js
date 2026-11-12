@@ -1616,6 +1616,62 @@ const check = (name, ok, detail) => {
     hangErrors.length === 0, hangErrors.slice(0, 2).join(' | '));
   await p27.close();
 
+  // The capture list was bounded by a count — the last 30 items — and a count
+  // is not a memory bound. The quality row goes to 64 MP at q .98, where one
+  // photo is 15–25 MB and a Max-quality take is ~210 MB a minute, so thirty
+  // items pin well over half a gigabyte of blobs and the WebView is killed long
+  // before the cap is ever reached. The list must also stay under a byte
+  // budget, evicting oldest-first (releasing the blob URL as it goes) and never
+  // the capture that was just taken; the count cap must still bound an ordinary
+  // session exactly as before.
+  const p28 = await browser.newPage();
+  await p28.setViewport({ width: 400, height: 840 });
+  p28.on('pageerror', e => errors.push('pageerror(items): ' + e.message));
+  // the revocation probes fetch a URL that was just revoked on purpose, and a
+  // failed blob: load is logged as a resource error — that one is expected here
+  p28.on('console', m => {
+    if (m.type() === 'error' && !/ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console(items): ' + m.text().slice(0, 160));
+  });
+  await p28.goto(URL, { waitUntil: 'load' });
+  await wait(2000);
+  const cap = await p28.evaluate(async () => {
+    // a real 1×1 PNG per item, so the thumb never logs a decode error; the size
+    // each item reports is the size the app itself now hands add()
+    const png = await (await fetch('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==')).blob();
+    const mk = (n) => { const u = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+      add({ t: 'i', u, x: 'jpg', n }); return u; };
+    const sum = () => items.reduce((a, it) => a + (it.n || 0), 0);
+    const live = async (u) => fetch(u).then(() => true, () => false);
+
+    const tiny = [];
+    for (let i = 0; i < 40; i++) tiny.push(mk(1));
+    const count = { len: items.length, bytes: sum(), oldest: await live(tiny[0]),
+      newest: items[items.length - 1].u === tiny[39] };
+
+    items.length = 0; itemBytes = 0;                 // this page is disposable
+    const big = [];
+    for (let i = 0; i < 40; i++) big.push(mk(5e6));
+    const bytes = { len: items.length, total: sum(), budget: MAX_ITEM_BYTES,
+      oldest: await live(big[0]), newest: await live(big[39]),
+      newestIsLast: items[items.length - 1].u === big[39] };
+
+    items.length = 0; itemBytes = 0;
+    mk(2e8);                                         // one capture bigger than the whole budget
+    const single = { len: items.length, total: sum() };
+    return { count, bytes, single };
+  });
+  check('the capture list is bounded by bytes, not only by count',
+    cap.bytes.total <= cap.bytes.budget && cap.bytes.len === 19 &&
+    cap.bytes.oldest === false && cap.bytes.newest === true && cap.bytes.newestIsLast === true,
+    cap.bytes.len + ' items, ' + (cap.bytes.total / 1e6) + ' MB of ' + (cap.bytes.budget / 1e6) +
+    ' MB, oldest released ' + (cap.bytes.oldest === false) + ', newest kept ' + cap.bytes.newest);
+  check('a single capture larger than the budget is still kept',
+    cap.single.len === 1 && cap.single.total === 2e8, cap.single.len + ' item(s)');
+  check('the count cap still bounds ordinary-sized captures',
+    cap.count.len === 30 && cap.count.bytes === 30 && cap.count.oldest === false && cap.count.newest === true,
+    cap.count.len + ' items, ' + cap.count.bytes + ' B, oldest released ' + (cap.count.oldest === false));
+  await p28.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
