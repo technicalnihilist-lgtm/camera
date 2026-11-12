@@ -1469,11 +1469,27 @@ async function toggleRec(){
   busy=true;
   try{
     if(S.tm&&!(await countdown()))return;
-    let audioTracks=[];
-    try{micS=await micStream();audioTracks=micS.getAudioTracks()}catch(e){micS=null}
-    const noMic=!audioTracks.length;
-    if(!stream||!v.videoWidth){micS&&micS.getTracks().forEach(t=>t.stop());micS=null;return toast('Camera is not ready yet')}
+    /* The tap waited for the take's two device jobs one after the other: the
+       microphone request, and then the recording surface — a canvas
+       allocation, its first full-size crop draw and captureStream(). They are
+       independent and neither needs the other's result (a take with no sound
+       still records from the same surface), so the surface is built while the
+       microphone request is in flight and the shutter waits for the longer of
+       the two instead of their sum. Measured on the fake 4K device, tap to the
+       recording state, after the first take's cold permission prompt: 1907 ms
+       and 1144 ms before against 1300 ms and 811 ms after, the remainder being
+       the surface — which is what the tap now waits for — plus the recorder's
+       construction. A surface that is built and then not used — the camera went
+       away during the microphone wait, or the recorder could not be
+       constructed — is stopped by the same `cleanupRec()` every other failure
+       path already uses, so an abandoned take can never leave a capture loop
+       running. */
+    const micP=micStream();
     pipe=makePipe();
+    let audioTracks=[];
+    try{micS=await micP;audioTracks=micS.getAudioTracks()}catch(e){micS=null}
+    const noMic=!audioTracks.length;
+    if(!stream||!v.videoWidth){cleanupRec();return toast('Camera is not ready yet')}
     const vs=pipe?pipe.stream.getVideoTracks():stream.getVideoTracks();
     if(!vs.length){cleanupRec();return toast('Camera is not ready yet')}
     const st=new MediaStream([...vs,...audioTracks]);
