@@ -1672,6 +1672,46 @@ const check = (name, ok, detail) => {
     cap.count.len + ' items, ' + cap.count.bytes + ' B, oldest released ' + (cap.count.oldest === false));
   await p28.close();
 
+  // getContext() answers null — it does not throw — when the browser cannot
+  // give a canvas its backing store, and a Max-quality still is a 256 MB one.
+  // Every line after it used to throw (drawSrc()'s first statement is
+  // ctx.save()), nothing caught it, and the shot was lost with the toast
+  // untouched and the decoded still left open. It must be answered with the
+  // message a null blob already gets, with no unhandled error, and the next
+  // shot must still be taken once the surface can be allocated again.
+  const p29 = await browser.newPage();
+  await p29.setViewport({ width: 400, height: 840 });
+  p29.on('pageerror', e => errors.push('pageerror(surface): ' + e.message));
+  await p29.evaluateOnNewDocument(() => {
+    const gc = HTMLCanvasElement.prototype.getContext;
+    window.__gc = gc;
+    HTMLCanvasElement.prototype.getContext = function (t, o) {
+      if (t === '2d' && this.width * this.height > 1e6) return null;
+      return gc.call(this, t, o);
+    };
+  });
+  await p29.goto(URL, { waitUntil: 'load' });
+  await wait(2000);
+  // one candidate instead of a three-still burst: the surface is what is being
+  // tested, and a single frame reaches the draw in a fraction of the time
+  await p29.evaluate(() => { E.burst = false; });
+  await p29.click('#shut');
+  await wait(3000);
+  const noCtx = await p29.evaluate(() => ({ items: items.length, busy: busy,
+    toast: document.querySelector('#toast').textContent,
+    shown: +getComputedStyle(document.querySelector('#toast')).opacity > .5 }));
+  check('a still whose surface cannot be allocated says so',
+    noCtx.items === 0 && noCtx.busy === false && noCtx.shown === true &&
+    /Could not save the photo/.test(noCtx.toast),
+    noCtx.items + ' item(s), busy ' + noCtx.busy + ', toast "' + noCtx.toast + '"');
+  await p29.evaluate(() => { HTMLCanvasElement.prototype.getContext = window.__gc; });
+  await p29.click('#shut');
+  await wait(3000);
+  const afterCtx = await p29.evaluate(() => ({ items: items.length }));
+  check('and the next shot is still taken once the surface is available',
+    afterCtx.items === 1, afterCtx.items + ' photo(s)');
+  await p29.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
