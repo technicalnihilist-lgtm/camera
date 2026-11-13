@@ -904,6 +904,54 @@ const check = (name, ok, detail) => {
   check('no errors from the camera lifecycle', camErrors.length === 0, camErrors.slice(0, 2).join(' | '));
   await p12.close();
 
+  // A camera that ends under a take used to leave the take running for good: the
+  // gate came up over a recording nothing can stop, the clip was never finalised
+  // and `rec` stayed set — and the gate's own button runs start(), which returns
+  // at once while `rec` is set, so the camera could not be taken up again at all
+  // until the app was restarted. A video track's `ended` is the device going away
+  // under the page, and a take owns the sensor, so the take has to be ended the
+  // way the stop tap ends it: the clip up to that moment is kept, `rec` is clear,
+  // and the gate's retry really reconnects.
+  const p24 = await browser.newPage();
+  await p24.setViewport({ width: 400, height: 840 });
+  const endErrors = [];
+  p24.on('pageerror', e => endErrors.push('pageerror(end): ' + e.message));
+  p24.on('console', m => { if (m.type() === 'error') endErrors.push('console(end): ' + m.text().slice(0, 160)); });
+  await p24.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const endTake = await p24.evaluate(async () => {
+    document.querySelector('[data-m=video]').click();
+    await new Promise(k => setTimeout(k, 200));
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 40 && !rec; i++) await new Promise(k => setTimeout(k, 200));
+    const started = !!rec;
+    await new Promise(k => setTimeout(k, 1200));   // let the take hold some frames
+    const tr = stream.getVideoTracks()[0];
+    tr.dispatchEvent(new Event('ended'));          // the sensor goes away
+    for (let i = 0; i < 50 && rec; i++) await new Promise(k => setTimeout(k, 100));
+    await new Promise(k => setTimeout(k, 600));    // the clip lands a paint after the take is put down
+    const after = { rec: !!rec, gate: !document.querySelector('#gate').hidden, items: items.length };
+    document.querySelector('#gb').click();         // the gate's retry
+    for (let i = 0; i < 60; i++) {
+      await new Promise(k => setTimeout(k, 100));
+      if (stream && v.videoWidth > 0 && document.querySelector('#gate').hidden) break;
+    }
+    return {
+      started, after,
+      back: { live: !!stream, w: v.videoWidth, gate: !document.querySelector('#gate').hidden,
+        states: stream ? stream.getTracks().map(t => t.readyState) : [] },
+    };
+  });
+  check('a camera that ends under a take ends the take, not the app',
+    endTake.started && endTake.after.rec === false && endTake.after.gate === true && endTake.after.items === 1,
+    'started ' + endTake.started + ', rec ' + endTake.after.rec + ', gate ' + endTake.after.gate + ', items ' + endTake.after.items);
+  check('and the gate brings the camera back after it',
+    endTake.back.live && endTake.back.w > 0 && endTake.back.gate === false &&
+    endTake.back.states.every(s => s === 'live'),
+    endTake.back.w + 'px, gate hidden ' + !endTake.back.gate + ', tracks ' + endTake.back.states.join(','));
+  check('no errors from the camera that ended under a take', endErrors.length === 0, endErrors.slice(0, 2).join(' | '));
+  await p24.close();
+
   // A photo capture owns the camera in exactly the same way a take does, and the
   // hide handler released the sensor regardless of whether a shot was in flight:
   // a page hidden while the burst was still running had its tracks stopped and

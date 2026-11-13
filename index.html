@@ -721,7 +721,18 @@ async function start(){
     stream=s;
     v.srcObject=s;releaseOld();await imgWait(v.play(),PREVIEW_WAIT).catch(()=>{});if(id!==startId)return;v.style.opacity=1;$('#gate').hidden=true;
     const t=s.getVideoTracks()[0];
-    if(t)t.onended=()=>{if(stream!==s)return;v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
+    /* A camera that ends under a take left the take running for good. The gate
+       came up over a recording nothing can stop — `#shut` is behind the gate —
+       so the clip was never finalised and `rec` stayed set, and the gate's own
+       button runs start(), which returns at once while `rec` is set: the app
+       could not take the camera up again until it was restarted. A video
+       track's `ended` is the device going away under the page (another app
+       taking the sensor, a camera service restart), and a take owns the sensor
+       exactly as a capture does — the reason the hide handler leaves it alone.
+       End it the way the stop tap does, so the clip up to that moment is kept
+       and `rec` is clear for the retry. Nothing on screen changes: the same
+       gate, the same message, and the clip on the thumb that any stop leaves. */
+    if(t)t.onended=()=>{if(stream!==s)return;if(rec)stopRec();v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
     const c=(t&&t.getCapabilities&&t.getCapabilities())||{};torchOK=!!c.torch;torchOn=false;
     ic=null;photoCaps=null;stillSmall=false;
     if(t&&window.ImageCapture){try{ic=new ImageCapture(t);ic.getPhotoCapabilities().then(pc=>{if(stream===s){photoCaps=pc;report()}}).catch(()=>{})}catch(e){ic=null}}
