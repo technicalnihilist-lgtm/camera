@@ -1378,7 +1378,24 @@ function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rt
   if(pipe){pipe.stop();pipe=null}
   if(micS){micS.getTracks().forEach(t=>t.stop());micS=null}
   chunks.length=0;
-  rec=null}
+  /* The recorder of the take that is ending was left attached to the page. A
+     take finalised by one of the watchdogs — the two paths that exist exactly
+     for a pipeline that may not deliver its `stop` — is put down while the
+     recorder is still alive, and its handlers stay on: `ondataavailable`
+     pushes into `chunks`, which by then belongs to the *next* take. Measured
+     here on the fake 4K device: a take whose stop() posted nothing was
+     finalised by the error watchdog (0 items, "Nothing was recorded"), the
+     next take was started, and one late flush from the finished recorder put
+     its 100-byte part into that take's chunk list — `chunks` went from 1 part
+     to 2, with the dead take's bytes in it. What the user would get is a clip
+     whose header and first fragments belong to a different take. Detach the
+     handlers and stop the recorder here, so a take that has been put down can
+     never hand anything to the one that follows it; a recorder that is already
+     inactive throws on stop() and is left exactly as it was. The handlers
+     below also check that they are still the current recorder, for the window
+     between a finalise and this detach. */
+  const rr=rec;rec=null;
+  if(rr){try{rr.ondataavailable=rr.onstop=rr.onerror=null}catch(e){}try{rr.stop()}catch(e){}}}
 /* A take ends in the order the user is waiting on now: the frame for the poster
    is copied off the recording canvas, the take is put down (`cleanupRec()` — the
    shutter back to its round state, the red pill gone, the pipe and the
@@ -1513,8 +1530,8 @@ async function toggleRec(){
       .find(t=>{try{return MediaRecorder.isTypeSupported(t)}catch(e){return false}});
     const rr=new MediaRecorder(st,Object.assign(mt?{mimeType:mt}:{},{videoBitsPerSecond:QP[E.q].vbr,audioBitsPerSecond:192000}));
     rec=rr;
-    rr.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
-    rr.onerror=()=>{toast('Recording stopped unexpectedly');recoverRec(rr)};
+    rr.ondataavailable=e=>{if(rec!==rr)return;if(e.data&&e.data.size)chunks.push(e.data)};
+    rr.onerror=()=>{if(rec!==rr)return;toast('Recording stopped unexpectedly');recoverRec(rr)};
     rr.onstop=()=>finishRec(rr);
     rr.start(250);
     app.classList.add('rec');
