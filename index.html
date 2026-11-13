@@ -283,12 +283,28 @@ function plop(){if(!S.snd)return;try{AC=AC||new(window.AudioContext||window.webk
   ns.connect(f).connect(g).connect(AC.destination);ns.start(t)}catch(e){}}
 
 /* ---------- tap: sound + bounce on every control ---------- */
-let pressed=null;
+/* The control being pressed was remembered in a single slot, so a second finger
+   on a second control overwrote the first: releasing either finger cleared the
+   other's press state, and the control pressed first kept its inline
+   scale(.88) for good — a button visibly stuck at its pressed size. Measured on
+   the fake device with a thumb resting on the flip button while the shutter is
+   tapped: after both fingers lift, #flip is still transform: scale(0.88) until
+   it is tapped again, and the shutter lost its press while the finger was still
+   down. Each press is remembered by its pointer now, so every finger releases
+   the control it is on, and a press whose pointerup can never arrive — the app
+   going to the background or losing focus with a finger down — is released with
+   the page instead of staying shrunk. One finger on one control is untouched:
+   the same press, the same release, the same bounce. */
+const pressed=new Map();
+const unpress=g=>{g.style.transition='';g.style.transform='';spr(g,{s:.88},{s:1},{k:50})};
 addEventListener('pointerdown',e=>{const g=e.target.closest('.g');
   if(g||e.target.type==='range')plop();
-  if(g){pressed=g;g.style.transition='transform .09s ease-out';g.style.transform='scale(.88)'}});
-const rel=()=>{if(!pressed)return;const g=pressed;pressed=null;g.style.transition='';g.style.transform='';spr(g,{s:.88},{s:1},{k:50})};
+  if(g){pressed.set(e.pointerId,g);g.style.transition='transform .09s ease-out';g.style.transform='scale(.88)'}});
+const rel=e=>{const g=pressed.get(e.pointerId);if(!g)return;pressed.delete(e.pointerId);unpress(g)};
+const relAll=()=>{for(const g of pressed.values())unpress(g);pressed.clear()};
 addEventListener('pointerup',rel);addEventListener('pointercancel',rel);
+addEventListener('blur',relAll);
+addEventListener('visibilitychange',()=>{if(document.hidden)relAll()});
 
 /* ---------- sheets (open + close bounce) ---------- */
 function showSheet(el){if(openS===el)return;if(openS)hideSheet(true);
