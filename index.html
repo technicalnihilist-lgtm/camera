@@ -348,6 +348,21 @@ $('#rB').onchange=()=>spr($('#sheet'),{s:.93},{s:1});
    changes: the same class, on the same element, at the same moment. */
 function setSw(id,on){const b=$(id);if(!b)return;const w=$('.sw',b);
   if(w)w.classList.toggle('on',!!on);b.setAttribute('aria-pressed',on?'true':'false')}
+/* The three segmented rows — zoom (1x/2x/3x), mode (Video/Photo/Square) and
+   quality (Max/High/Standard) — had exactly the defect the six switch rows were
+   fixed for in run 5/10, one step further on: the chosen button was carried only
+   as the `.on` colour class, so every button in the row announced the same
+   "2x, button" / "Video, button" whether it was the one in effect or not. On
+   the two rows that decide what the shutter does when it is tapped — the mode
+   row switches the shutter between a photo and a take, and the zoom row decides
+   the framing of the capture — a user who cannot see the yellow had no way to
+   tell which one is selected, and tapping to "find out" changes the shot. The
+   setter below is the single place a row's selection becomes state, exactly as
+   setSw() is for the switches: the authored default, a tap and a boot state all
+   report the same button the class does. Nothing on screen changes — the same
+   class, on the same elements, at the same moment. */
+function setSeg(sel,on){$$(sel+' button').forEach(b=>{const hit=b===on;
+  b.classList.toggle('on',hit);b.setAttribute('aria-pressed',hit?'true':'false')})}
 $('#snd').onclick=()=>{S.snd=!S.snd;setSw('#snd',S.snd);if(S.snd)plop();saveCfg()};
 $('#bS').onclick=()=>{if(rec)return toast('Stop recording first');showSheet($('#sheet'))};
 /* Every slider `input` event wrote the whole config straight to localStorage:
@@ -378,6 +393,9 @@ loadCfg();
    water sound has no such setter, so a launch with no saved config would leave
    its row with no state at all */
 setSw('#snd',S.snd);
+/* the three segmented rows are authored with their selected button already
+   marked `.on`, so their reported state is placed from the markup at boot */
+setSeg('#zoom',$('.zoom button.on'));setSeg('#modes',$('.modes button.on'));setSeg('#qseg',$('#qseg button.on'));
 applyGlass();applyBounce();
 $('#bE').onclick=()=>{if(rec)return toast('Stop recording first');report();showSheet($('#eng'))};
 $('#edone').onclick=()=>hideSheet();
@@ -398,7 +416,7 @@ $('#edone').onclick=()=>hideSheet();
 $$('#qseg button').forEach(b=>b.onclick=()=>{if(b.dataset.q===E.q)return;
   if(rec||busy)return toast(rec?'Stop recording first':'Wait for the timer to finish');
   E.q=b.dataset.q;
-  $$('#qseg button').forEach(x=>x.classList.toggle('on',x===b));
+  setSeg('#qseg',b);
   toast({max:'Max quality · highest sensor resolution',high:'High quality · 4K stream',std:'Standard · 1080p, faster'}[E.q]);start()});
 function bindSw(id,key){const b=$(id);setSw(id,E[key]);
   b.onclick=()=>{E[key]=!E[key];setSw(id,E[key])}}
@@ -581,7 +599,7 @@ function moveInd(first){const b=$('.modes .on'),l=b.offsetLeft,w=b.offsetWidth,i
     i.animate(p.map(x=>({left:prev.l+(l-prev.l)*x+'px',width:Math.max(20,prev.w+(w-prev.w)*x)+'px'})),{duration:T*1000})}
   i.style.left=l+'px';i.style.width=w+'px';prev={l,w}}
 $$('.modes button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to change mode':'Wait for the timer to finish');S.mode=b.dataset.m;
-  $$('.modes button').forEach(x=>x.classList.toggle('on',x===b));
+  setSeg('#modes',b);
   app.classList.toggle('sq',S.mode==='square');app.classList.toggle('vid',S.mode==='video');moveInd()});
 
 /* ---------- camera ---------- */
@@ -644,7 +662,7 @@ function modeAdv(c,omitFocus){const adv=[];
     if((k!=='focusMode'||!omitFocus)&&c&&c[k]&&c[k].includes&&c[k].includes('continuous'))adv.push({[k]:'continuous'});
   return adv}
 $$('.zoom button').forEach(b=>b.onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to change zoom':'Wait for the timer to finish');
-  S.z=+b.dataset.z;$$('.zoom button').forEach(x=>x.classList.toggle('on',x===b));applyZoom()});
+  S.z=+b.dataset.z;setSeg('#zoom',b);applyZoom()});
 const SEC_HEAD='Camera blocked by browser security';
 function isFramed(){try{return window.top!==window.self}catch(e){return true}}
 function openable(){return /^(https?|file):/i.test(location.href)}

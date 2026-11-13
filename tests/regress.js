@@ -1588,6 +1588,53 @@ const check = (name, ok, detail) => {
     swTap.every(r => (r.off.pressed === 'true') === r.off.on && (r.back.pressed === 'true') === r.back.on));
   await p25.close();
 
+  // The three segmented rows — zoom (1×/2×/3×), mode (Video/Photo/Square) and
+  // quality (Max/High/Standard) — carried the selected button only as the `.on`
+  // colour class, exactly as the switch rows did before run 5/10: every button
+  // in a row announced "Video, button" whether it was the one in effect or not,
+  // on the two rows that decide what the shutter does when it is tapped. Each
+  // row must report its selection now, at boot and after a tap, always agreeing
+  // with the class it has always used.
+  const ROWS = ['#zoom', '#modes', '#qseg'];
+  const p25b = await browser.newPage();
+  await p25b.setViewport({ width: 400, height: 840 });
+  p25b.on('pageerror', e => errors.push('pageerror(segments): ' + e.message));
+  p25b.on('console', m => { if (m.type() === 'error') errors.push('console(segments): ' + m.text().slice(0, 160)); });
+  await p25b.evaluateOnNewDocument(() => { try { localStorage.clear(); } catch (e) {} });
+  await p25b.goto(URL, { waitUntil: 'load' });
+  await wait(1500);
+  const segBoot = await p25b.evaluate(rows => rows.map(r => {
+    const bs = [...document.querySelectorAll(r + ' button')];
+    return { row: r, n: bs.length,
+      pressed: bs.filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.textContent.trim()),
+      on: bs.filter(b => b.classList.contains('on')).map(b => b.textContent.trim()),
+      agree: bs.every(b => b.getAttribute('aria-pressed') === (b.classList.contains('on') ? 'true' : 'false')) };
+  }), ROWS);
+  check('every segmented row reports the button in effect at boot',
+    segBoot.every(r => r.pressed.length === 1 && r.on.length === 1 && r.pressed[0] === r.on[0] && r.agree),
+    segBoot.map(r => r.row + '=' + r.pressed.join('/') + ' of ' + r.n).join(' '));
+  const segTap = await p25b.evaluate(() => {
+    const out = [];
+    const tap = (row, idx) => {
+      const bs = [...document.querySelectorAll(row + ' button')];
+      bs[idx].click();
+      out.push({ row, tap: bs[idx].textContent.trim(),
+        pressed: bs.filter(b => b.getAttribute('aria-pressed') === 'true').map(b => b.textContent.trim()),
+        on: bs.filter(b => b.classList.contains('on')).map(b => b.textContent.trim()),
+        agree: bs.every(b => b.getAttribute('aria-pressed') === (b.classList.contains('on') ? 'true' : 'false')) });
+    };
+    tap('#zoom', 1);
+    tap('#modes', 0);
+    tap('#modes', 1);
+    tap('#qseg', 1);
+    return out;
+  });
+  check('a segmented row reports the button a tap puts in effect',
+    segTap.every(r => r.pressed.length === 1 && r.pressed[0] === r.tap &&
+      r.on.length === 1 && r.on[0] === r.tap && r.agree),
+    segTap.map(r => r.row + ' tapped ' + r.tap + ' -> ' + r.pressed.join('/')).join('; '));
+  await p25b.close();
+
   // ...and it must report the state *in effect*, not the authored one: under
   // reduced motion the page turns 4D parallax off before the first frame, so its
   // row has to read off while the others read on.
