@@ -891,6 +891,21 @@ $('#gn').onclick=()=>{native=true;$('#gate').hidden=true;gatePick=true;pickNativ
 fi.onchange=()=>{const f=fi.files&&fi.files[0];if(!f)return restoreGate();gatePick=false;
   const u=URL.createObjectURL(f),isV=f.type.startsWith('video/');
   const ext=(f.name.split('.').pop()||(isV?'mp4':'jpg')).toLowerCase();
+  /* A picked file stayed in the input's FileList for the rest of the session.
+     `pickNative()` clears the input before the *next* pick, but nothing cleared
+     it after one, so the picker kept its own reference to the file's bytes for
+     as long as the WebView lived — outside the `items` byte budget, which is
+     the only thing bounding what this app holds. A video picked from the
+     gallery is exactly the file that is too big to keep: measured here with a
+     6 MB pick, `#fi.files` held all 6 291 456 bytes after the item had been
+     added, and it would still hold them after that item was evicted and its
+     object URL revoked — the same unbounded growth the byte budget and the
+     chunk release were added to stop, reached by a route neither of them
+     covers. The object URL created above is its own reference to the file, so
+     the picker's copy is not needed once it exists: clearing the input frees it
+     and the item is untouched — after the clear the same item still fetches all
+     6 291 456 bytes, byte for byte, and `#fi.files` goes 1 → 0. */
+  fi.value='';
   add({t:isV?'v':'i',u,x:ext,p:'',n:f.size});toast(isV?'Video saved to gallery':'Photo saved to gallery')};
 $('#gb').onclick=async()=>{if(gbAction==='open')return openTop();await start();if(!$('#gate').hidden)toast('Still blocked by the browser')};
 $('#flip').onclick=()=>{if(rec||busy)return toast(rec?'Stop recording to flip camera':'Wait for the timer to finish');

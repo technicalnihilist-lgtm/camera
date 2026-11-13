@@ -1467,6 +1467,22 @@ const check = (name, ok, detail) => {
     'gate hidden ' + gate2.hidden + ', ' + gate2.items + ' item(s), native ' + gate2.native +
     (gate2.err ? ', ' + gate2.err : ''));
 
+  // The picked file must not stay pinned by the <input> once the item that owns
+  // it exists. Nothing cleared the input after a pick, so its FileList kept its
+  // own reference to the file's bytes for the life of the WebView — outside the
+  // `items` byte budget, and past that item's eviction. The object URL holds its
+  // own reference, so the item must still be byte-identical after the clear.
+  const pickMem = await p21.evaluate(async () => {
+    const fi = document.querySelector('#fi'), it = items[items.length - 1];
+    let got = -1;
+    try { got = (await (await fetch(it.u)).arrayBuffer()).byteLength; } catch (e) {}
+    return { files: fi.files.length, value: fi.value, n: it.n, got: got };
+  });
+  check('a picked file is not pinned by the input after the pick',
+    pickMem.files === 0 && pickMem.value === '' && pickMem.n > 0 && pickMem.got === pickMem.n,
+    '#fi.files ' + pickMem.files + ', value "' + pickMem.value + '", item ' +
+    pickMem.n + ' bytes, fetched ' + pickMem.got);
+
   // a picker opened later from the shutter is native-picker mode, not the gate
   try {
     const fc3p = p21.waitForFileChooser({ timeout: 8000 });
