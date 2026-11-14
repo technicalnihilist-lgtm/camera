@@ -1823,6 +1823,42 @@ const check = (name, ok, detail) => {
     afterCtx.items === 1, afterCtx.items + ' photo(s)');
   await p29.close();
 
+  // A stopped take is put down first and only then built, one painted frame
+  // later (finishRec → nextPaint → add). That wait checked document.hidden once,
+  // at the call, so a page that stopped painting *inside* those two frames — the
+  // phone locked on the stop tap, a WebView whose frames stop arriving — left it
+  // pending for ever: the shutter had already gone back to its round state, and
+  // the clip, its poster and any message never arrived. The take must still land.
+  const p30 = await browser.newPage();
+  await p30.setViewport({ width: 400, height: 840 });
+  p30.on('pageerror', e => errors.push('pageerror(paint): ' + e.message));
+  await p30.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  await p30.click('#modes button[data-m="video"]');
+  await wait(300);
+  await p30.click('#shut');
+  await wait(1400);
+  // the page stops painting: no frame callbacks from here on
+  await p30.evaluate(() => { window.requestAnimationFrame = () => 0; });
+  const paintWait = await p30.evaluate(() => {
+    const t0 = performance.now();
+    return Promise.race([nextPaint().then(() => Math.round(performance.now() - t0)),
+      new Promise(r => setTimeout(() => r(-1), 3000))]);
+  });
+  check('the paint wait before a stopped take is bounded',
+    paintWait >= 0 && paintWait < 1000, 'resolved in ' + paintWait + ' ms with no frames arriving');
+  const beforeStop = await p30.evaluate(() => ({ rec: !!rec, items: items.length }));
+  await p30.click('#shut');
+  await wait(1600);
+  const afterStop = await p30.evaluate(() => ({ rec: !!rec, items: items.length,
+    recording: document.querySelector('#app').classList.contains('rec') }));
+  check('a take stopped on a page that stops painting is still saved',
+    beforeStop.rec === true && afterStop.items === 1 && afterStop.rec === false &&
+    afterStop.recording === false,
+    'recording ' + beforeStop.rec + ' -> ' + afterStop.rec + ', ' + afterStop.items +
+    ' item(s), recording state ' + afterStop.recording);
+  await p30.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

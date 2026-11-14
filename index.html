@@ -1128,9 +1128,29 @@ const yieldTask=(()=>{try{const mc=new MessageChannel(),q=[];
    the intro does: requestAnimationFrame() fires at the start of a frame's
    rendering steps, so the callback in the *next* frame means the first one has
    been composited. A hidden page runs no frames at all, so the wait is skipped
-   there instead of never ending. */
+   there instead of never ending.
+   Skipped *at the call*, which is the one thing that did not cover the case
+   this wait is used for. `finishRec()` puts the take down and then waits for a
+   painted frame before it builds the clip, so a page that becomes hidden inside
+   those two frames — the phone locked, Home pressed, another app opened on the
+   stop tap, or a WebView whose frames simply stop arriving — stops running
+   frames *after* the check has already said the page is visible. The wait then
+   never ends: the take had already been put down (`cleanupRec()` runs before
+   it), so the shutter went back to its round state and the red pill went away
+   exactly as on a finished take, and then nothing — no clip on the thumb, no
+   poster, no message, and the take's parts left in a detached array. The whole
+   recording was lost in silence, which is the failure every other bounded wait
+   in this file exists to prevent. Bound it like them: two frames on a page that
+   is painting (33 ms at 60 Hz, and the frame that was waited for is already on
+   screen by then), and a timer that answers for a page that is not — a timer
+   still fires on a hidden page, so the clip is built ~a quarter of a second
+   later instead of never. A page that is painting never reaches the timer. */
+const PAINT_WAIT=250;
 const nextPaint=()=>document.hidden?Promise.resolve():
-  new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+  new Promise(r=>{let done=false,t=0;
+    const fin=()=>{if(done)return;done=true;clearTimeout(t);r()};
+    t=setTimeout(fin,PAINT_WAIT);
+    requestAnimationFrame(()=>requestAnimationFrame(fin))});
 /* The convolution itself is the largest block detail boost still has left: it
    touches every pixel of the frame and runs on the shutter's critical path, so
    the user waits for it. It read each pixel's four neighbours out of the row
