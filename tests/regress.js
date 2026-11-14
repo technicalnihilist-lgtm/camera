@@ -1783,6 +1783,54 @@ const check = (name, ok, detail) => {
     cap.count.len + ' items, ' + cap.count.bytes + ' B, oldest released ' + (cap.count.oldest === false));
   await p28.close();
 
+  // Eviction is skipped while the viewer is open, so the clip on screen keeps
+  // its source — but `add()` was the only evictor, and the viewer can be opened
+  // during a capture (`#thumb` has no rec/busy guard), so a capture that landed
+  // behind the open sheet left the list over its byte budget with nothing left
+  // to correct it. The bound must hold again as soon as the viewer closes, and
+  // the item the viewer was showing must not be released while it is open.
+  const pEv = await browser.newPage();
+  await pEv.setViewport({ width: 400, height: 840 });
+  pEv.on('pageerror', e => errors.push('pageerror(evict): ' + e.message));
+  pEv.on('console', m => {
+    if (m.type() === 'error' && !/ERR_FILE_NOT_FOUND/.test(m.text())) errors.push('console(evict): ' + m.text().slice(0, 160));
+  });
+  await pEv.goto(URL, { waitUntil: 'load' });
+  await wait(2000);
+  const ev = await pEv.evaluate(async () => {
+    const png = await (await fetch('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==')).blob();
+    const mk = (n) => { const u = URL.createObjectURL(new Blob([png], { type: 'image/png' }));
+      add({ t: 'i', u, x: 'jpg', n }); return u; };
+    const sum = () => items.reduce((a, it) => a + (it.n || 0), 0);
+    const live = async (u) => fetch(u).then(() => true, () => false);
+    const w = ms => new Promise(k => setTimeout(k, ms));
+
+    items.length = 0; itemBytes = 0;
+    let newest = '';
+    for (let i = 0; i < 10; i++) mk(1e6);                 // 10 MB, inside the budget
+    vi = items.length - 1; renderView(); showSheet(document.querySelector('#view'));
+    const shown = items[vi].u;                            // what the viewer is showing
+    const opened = openS === document.querySelector('#view');
+    for (let i = 0; i < 10; i++) newest = mk(1e7);        // 100 MB behind the open sheet
+    const during = { len: items.length, bytes: sum(), open: openS === document.querySelector('#view'),
+      shownLive: await live(shown) };
+    hideSheet();                                          // the user closes the viewer
+    await w(1500);                                        // the close bounce
+    const after = { len: items.length, bytes: sum(), budget: MAX_ITEM_BYTES,
+      newestIsLast: items[items.length - 1].u === newest,
+      thumb: !!document.querySelector('#thumb img') };
+    return { opened, during, after };
+  });
+  check('a capture added behind the open viewer keeps the list over budget, and its clip alive',
+    ev.opened === true && ev.during.open === true && ev.during.bytes > ev.after.budget &&
+    ev.during.shownLive === true,
+    ev.during.len + ' items, ' + (ev.during.bytes / 1e6) + ' MB while the viewer is open, clip alive ' + ev.during.shownLive);
+  check('closing the viewer puts the list back inside the byte budget',
+    ev.after.bytes <= ev.after.budget && ev.after.len === 9 && ev.after.newestIsLast === true &&
+    ev.after.thumb === true,
+    ev.after.len + ' items, ' + (ev.after.bytes / 1e6) + ' MB of ' + (ev.after.budget / 1e6) + ' MB');
+  await pEv.close();
+
   // getContext() answers null — it does not throw — when the browser cannot
   // give a canvas its backing store, and a Max-quality still is a 256 MB one.
   // Every line after it used to throw (drawSrc()'s first statement is

@@ -319,7 +319,7 @@ function hideSheet(instant){const el=openS;if(!el)return;openS=null;app.classLis
      leak renderView() was fixed for on prev/next, on the far more common way out
      of the viewer. Release it as the element is discarded: the sheet is already
      hidden here, so nothing on screen changes. */
-  const done=()=>{if(openS===el)return;el.hidden=true;el.style.pointerEvents='';if(el.id==='view'){stopViewMedia();$('#vm').innerHTML=''}
+  const done=()=>{if(openS===el)return;el.hidden=true;el.style.pointerEvents='';if(el.id==='view'){stopViewMedia();$('#vm').innerHTML='';evict()}
     const a=sprAnims.get(el);if(a){try{a.cancel()}catch(e){}}sprAnims.delete(el)};
   if(instant){done();return}
   spr(el,{s:1,y:0,o:1},{s:.82,y:100,o:0},{k:1.5,end:done});
@@ -991,11 +991,28 @@ const MAX_ITEMS=30;
 const MAX_ITEM_BYTES=96e6;
 let itemBytes=0;
 function release(it){if(it&&typeof it.u==='string'&&it.u.lastIndexOf('blob:',0)===0){try{URL.revokeObjectURL(it.u)}catch(e){}}}
-function add(it){it.n=Math.max(0,+it.n||0);itemBytes+=it.n;items.push(it);
-  /* never evict while the viewer is showing the list (the open <video> would
-     lose its source); the shutter is unreachable then anyway */
+/* The bound is enforced in one place, and two things ask for it: a capture
+   arriving (`add()`) and the viewer closing. Nothing is evicted while the
+   viewer is showing the list, because the open <video> would lose its source
+   out from under it — but that guard was one-shot. `add()` was the only
+   evictor, so a capture that landed while the viewer was open left the list
+   over its byte budget with nothing left to correct it: the shutter is not
+   actually unreachable then, because `#thumb` opens the viewer with no
+   `rec`/`busy` guard, so a burst still decoding — or a take finalised by one of
+   the watchdogs, or by the camera ending — can add() behind the open sheet, and
+   the over-budget list then stayed that way for the rest of the session unless
+   another capture happened to be taken. Measured here: ten 1 MB items, the
+   viewer opened the way the thumb opens it, ten 10 MB captures added behind it
+   — 20 items, 110 MB of a 96 MB budget, and it was still 110 MB after the
+   viewer was closed. Evict as the reason for the guard goes away instead, so
+   the list is back inside the bound the moment the viewer closes. What is kept
+   and released on any ordinary capture is unchanged, and the newest item is
+   still never the one dropped. */
+function evict(){
   while((items.length>MAX_ITEMS||itemBytes>MAX_ITEM_BYTES)&&items.length>1&&openS!==$('#view')){
-    const old=items.shift();itemBytes-=old.n||0;release(old);if(vi>0)vi--}
+    const old=items.shift();itemBytes-=old.n||0;release(old);if(vi>0)vi--}}
+function add(it){it.n=Math.max(0,+it.n||0);itemBytes+=it.n;items.push(it);
+  evict();
   renderThumb();spr($('#thumb'),{s:.5},{s:1})}
 function renderThumb(){const it=items[items.length-1];
   $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
