@@ -1014,8 +1014,20 @@ function evict(){
 function add(it){it.n=Math.max(0,+it.n||0);itemBytes+=it.n;items.push(it);
   evict();
   renderThumb();spr($('#thumb'),{s:.5},{s:1})}
-function renderThumb(){const it=items[items.length-1];
-  $('#thumb').innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
+/* The thumbnail is the last place this app dropped a media element on the floor.
+   renderThumb() swaps #thumb's markup with one innerHTML write on every capture,
+   and the thumb shows a <video> whenever the newest item is a clip with no
+   poster — which is every clip picked through "Use phone camera app" (a pick
+   carries no poster at all) and any take whose poster grab failed. The outgoing
+   element was detached with its blob: source still attached, so its decoder and
+   its resource loader stayed alive until garbage collection — the same leak
+   renderView() was fixed for on prev/next and hideSheet() on the way out, on the
+   one media element those two did not cover. Release the source before the
+   markup is replaced, through the helper the viewer already uses; the picture on
+   screen is untouched, because the element is on its way out either way. */
+function renderThumb(){const it=items[items.length-1],t=$('#thumb');
+  releaseMedia(t.querySelector('video'));
+  t.innerHTML=!it?'':it.t==='i'?`<img src="${it.u}" alt="">`:(it.p?`<img src="${it.p}" alt="">`:`<video src="${it.u}" muted playsinline preload="metadata"></video>`)}
 const toJpg=(c,q)=>imgWait(new Promise(r=>c.toBlob(r,'image/jpeg',q)),IMG_ENCODE_WAIT);
 /* ImageCapture.takePhoto() is a request to the camera HAL, and its promise
    settles only when the still actually arrives: a sensor that is busy, wedged
@@ -1663,10 +1675,10 @@ $('#shut').onclick=async()=>{
    Tapping through a handful of clips therefore piled up dead players and their
    decoded frames. Pause it and release the source before the markup is
    replaced, so the decoder is freed on the spot. */
-function stopViewMedia(){const m=$('#vm').querySelector('video');
-  if(!m)return;
+function releaseMedia(m){if(!m)return;
   try{m.pause()}catch(e){}
   try{m.removeAttribute('src');m.load()}catch(e){}}
+function stopViewMedia(){releaseMedia($('#vm').querySelector('video'))}
 function renderView(){const it=items[vi];if(!it)return;
   stopViewMedia();
   $('#vm').innerHTML=it.t==='i'?`<img src="${it.u}" alt="">`

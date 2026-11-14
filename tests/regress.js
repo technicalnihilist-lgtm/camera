@@ -1907,6 +1907,42 @@ const check = (name, ok, detail) => {
     ' item(s), recording state ' + afterStop.recording);
   await p30.close();
 
+  /* The thumbnail was the last place the app replaced a media element without
+     releasing it. renderThumb() swaps #thumb's markup with one innerHTML write on
+     every capture, and the thumb shows a <video> whenever the newest item is a
+     clip with no poster — every clip picked through "Use phone camera app", and
+     any take whose poster grab failed. The outgoing element was detached with its
+     blob: source still attached (decoder and resource loader alive until GC),
+     which is the leak renderView() was fixed for on prev/next and hideSheet() on
+     the way out. The replaced element must have no source left. */
+  const p31 = await browser.newPage();
+  await p31.setViewport({ width: 400, height: 840 });
+  p31.on('pageerror', e => errors.push('pageerror(thumb): ' + e.message));
+  p31.on('console', m => { if (m.type() === 'error') errors.push('console(thumb): ' + m.text().slice(0, 160)); });
+  await p31.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const thumbFirst = await p31.evaluate(() => {
+    add({ t: 'v', u: URL.createObjectURL(new Blob(['clip'], { type: 'video/webm' })),
+      x: 'webm', p: '', n: 8 });
+    window.__oldThumb = document.querySelector('#thumb video');
+    return { video: !!window.__oldThumb, src: window.__oldThumb && window.__oldThumb.getAttribute('src') };
+  });
+  const thumbNext = await p31.evaluate(() => {
+    const old = window.__oldThumb;
+    const before = old ? old.getAttribute('src') : null;
+    add({ t: 'i', u: URL.createObjectURL(new Blob(['shot'], { type: 'image/jpeg' })),
+      x: 'jpg', p: '', n: 4 });
+    return { before, after: old ? old.getAttribute('src') : null,
+      tag: document.querySelector('#thumb').firstElementChild &&
+        document.querySelector('#thumb').firstElementChild.tagName };
+  });
+  check('the thumbnail releases the clip it replaces',
+    thumbFirst.video === true && !!thumbNext.before && thumbNext.after === null &&
+    thumbNext.tag === 'IMG',
+    'thumb video ' + thumbFirst.video + ', src before ' + (thumbNext.before ? 'set' : 'none') +
+    ', after ' + (thumbNext.after === null ? 'released' : 'still set') + ', thumb now ' + thumbNext.tag);
+  await p31.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
