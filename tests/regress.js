@@ -1366,6 +1366,53 @@ const check = (name, ok, detail) => {
     ', capture crop ' + zoomSkip.ratio.toFixed(2) + 'x narrower');
   await p19.close();
 
+  // The other half of that: a camera that advertises `zoom` and rejects the set
+  // outright. The zoom goes out as an `advanced` set, which a UA is supposed to
+  // skip rather than reject — a device that rejects it anyway landed in the
+  // empty catch, with S.dz already reset to 1 for the hardware path, so the row
+  // showed the tapped level and nothing on screen or in the capture zoomed. The
+  // rejection now falls back to the same digital zoom the silent skip does.
+  const p19b = await browser.newPage();
+  await p19b.setViewport({ width: 400, height: 840 });
+  p19b.on('pageerror', e => errors.push('pageerror(zoomreject): ' + e.message));
+  p19b.on('console', m => { if (m.type() === 'error') errors.push('console(zoomreject): ' + m.text().slice(0, 160)); });
+  await p19b.evaluateOnNewDocument(() => {
+    const P = MediaStreamTrack.prototype;
+    const caps = P.getCapabilities, apply = P.applyConstraints;
+    P.getCapabilities = function () {
+      let c = {};
+      try { c = caps.apply(this, arguments) || {}; } catch (e) {}
+      return Object.assign({}, c, { zoom: { min: 1, max: 3, step: 0.1 } });
+    };
+    P.applyConstraints = function (cs) {
+      const adv = cs && Array.isArray(cs.advanced) ? cs.advanced : [];
+      if (adv.some(a => a && a.zoom !== undefined))
+        return Promise.reject(Object.assign(new Error('constraint not satisfied'), { name: 'OverconstrainedError' }));
+      return apply.apply(this, arguments);
+    };
+  });
+  await p19b.goto(URL, { waitUntil: 'load' });
+  for (let i = 0; i < 40; i++) {
+    if (await p19b.evaluate(() => !!(stream && document.querySelector('#v').videoWidth))) break;
+    await wait(250);
+  }
+  const zoomReject = await p19b.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    document.querySelector('.zoom button[data-z="2"]').click();
+    await w(700);
+    const r2 = cropRect();
+    const keep = S.dz; S.dz = 1; const r1 = cropRect(); S.dz = keep;
+    return { z: S.z, dz: S.dz, scale: document.querySelector('#v').style.transform,
+      ratio: r1.sw / r2.sw,
+      row: (document.querySelector('.zoom button.on') || {}).textContent };
+  });
+  check('a camera that refuses the zoom falls back to the digital zoom too',
+    zoomReject.dz === 2 && /scale\(2/.test(zoomReject.scale) &&
+    Math.abs(zoomReject.ratio - 2) < 0.05 && zoomReject.row === '2\u00d7',
+    'S.z ' + zoomReject.z + ', S.dz ' + zoomReject.dz + ', preview ' + zoomReject.scale +
+    ', capture crop ' + zoomReject.ratio.toFixed(2) + 'x narrower, row ' + zoomReject.row);
+  await p19b.close();
+
   // start() awaited v.play() with no bound. play() settles only once the element
   // has actually started playing, so a preview whose frames stop arriving (a
   // wedged media pipeline, a camera grabbed by another app) left it pending for

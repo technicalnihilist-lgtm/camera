@@ -639,16 +639,39 @@ function vt(){v.style.transform=`scale(${(S.face==='user'?-1:1)*S.dz},${S.dz})`}
    getSettings() reports no `zoom` at all and is left alone, a value within the
    camera's own step counts as applied, and `dig()` drops out if the track was
    replaced or a newer tap already set a digital zoom, so a late readback can
-   never undo a newer one. A rejected apply is a refusal the caller already
-   treats as "no hardware zoom" and keeps its own path. */
+   never undo a newer one. A rejected apply was the one answer this left out;
+   it falls back to the digital zoom too, see below. */
+/* A camera that advertises `zoom` and then refuses the set is the other half of
+   the readback above, and it was the one case neither path covered. The zoom is
+   sent as an `advanced` set, which the spec says a UA skips rather than rejects
+   — but a camera that rejects it anyway (OverconstrainedError from the HAL, a
+   WebView whose zoom range the device no longer honours) landed in the empty
+   `.catch()` and nowhere else: `S.dz` had already been reset to 1 for the
+   hardware path, so the zoom row showed the tapped level while the preview and
+   the capture both stayed at 1× — the same silent divergence, reached by a
+   rejection instead of by a silent skip. Answer a rejection exactly as the
+   readback answers a set that did not move: fall back to the digital zoom this
+   app already has, so a tap on 1x/2x/3x always zooms. A tap that lands while an
+   earlier apply is still in flight also numbers its call now, so the older
+   apply — resolving late or rejecting late — can no longer act on the newer tap
+   and stack a digital zoom on a hardware zoom that a later tap did apply.
+   Measured against the fake device with a track that rejects any set carrying
+   `zoom`: the previous `index.html` left `S.z` 2 with `S.dz` 1, the preview at
+   `scale(1, 1)` and the capture crop 1.00× — a 2× tap that did nothing — and
+   now reports `S.dz` 2, `scale(2, 2)` and a crop 2.00× narrower. A camera that
+   applies the zoom is untouched: one constraint set, `S.dz` stays 1, and
+   nothing about the picture changes. */
+let zoomSeq=0;
 function applyZoom(){const t=track(),c=(t&&t.getCapabilities&&t.getCapabilities())||{};
   if(c.zoom){const z=Math.min(c.zoom.max,Math.max(c.zoom.min,S.z));S.dz=1;vt();
-    const dig=()=>{if(!t||track()!==t||S.dz!==1)return;S.dz=S.z;vt()};
-    t.applyConstraints({advanced:modeAdv(c).concat([{zoom:z}])}).then(()=>{
+    const seq=++zoomSeq;
+    const dig=()=>{if(!t||track()!==t||S.dz!==1||seq!==zoomSeq)return;S.dz=S.z;vt()};
+    let p;try{p=t.applyConstraints({advanced:modeAdv(c).concat([{zoom:z}])})}catch(e){p=Promise.reject(e)}
+    p.then(()=>{
       if(track()!==t)return;
       let st;try{st=t.getSettings&&t.getSettings()}catch(e){st=null}
       if(!st||st.zoom==null)return;
-      if(Math.abs(st.zoom-z)>Math.max(.01,(c.zoom.step||0)/2))dig()}).catch(()=>{})
+      if(Math.abs(st.zoom-z)>Math.max(.01,(c.zoom.step||0)/2))dig()},dig)
   }else{S.dz=S.z;vt()}}
 /* applyConstraints() replaces the track's whole constraint set, so every
    constraint set this app wrote after applyZoom() — the resolution bump and the
