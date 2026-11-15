@@ -1486,7 +1486,24 @@ function pipeCanvas(w,h){
   if(!pipeC){try{pipeC=document.createElement('canvas')}catch(e){return null}}
   if(pipeC.width!==w||pipeC.height!==h){pipeC.width=w;pipeC.height=h}
   return pipeC}
-addEventListener('visibilitychange',()=>{if(document.hidden&&pipeC&&!rec){pipeC.width=pipeC.height=0;pipeC=null}});
+/* "never during a take" was read as `rec` alone, and the take does not start
+   there: `toggleRec()` builds this surface and its capture stream first, then
+   waits for the microphone, and only then constructs the recorder and sets
+   `rec`. A hide inside that window — the ordinary first take, where the mic
+   prompt is up and the screen locks or the user switches app — found `rec`
+   still null and zeroed the very canvas the take is about to be recorded from.
+   The microphone then answers, the take starts against a 0 × 0 capture stream,
+   and nothing arrives from it: measured with a mic that answers 3 s late and a
+   hide-and-show at 150 ms, `rec` true, `pipe` true, `pipeC` gone, `chunks` 0
+   after 2 s of recording, and on stop "Nothing was recorded" — the whole take
+   lost, after a MediaRecorder had spent that time encoding an empty stream.
+   The pipe object is what marks the surface as in use, so it guards it too: it
+   exists from `makePipe()` until `cleanupRec()`, which is exactly the life of
+   the surface in a take. A hidden page still pins nothing for longer than one
+   take — `cleanupRec()` lets the surface go itself when it runs on a page that
+   is still hidden, so the release simply moves to the end of the take it was
+   owed to. */
+addEventListener('visibilitychange',()=>{if(document.hidden&&pipeC&&!rec&&!pipe){pipeC.width=pipeC.height=0;pipeC=null}});
 function makePipe(){
   const r=cropRect();if(!r)return null;
   const scale=Math.min(1,QP[E.q].vmax/Math.max(r.sw,r.sh));
@@ -1550,6 +1567,9 @@ let recWatch=0;
    revoked. Release them as soon as the take is finalised or abandoned. */
 function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
   if(pipe){pipe.stop();pipe=null}
+  /* the surface above is left alone while a take is being prepared, so a take
+     that ends — or is abandoned — on a hidden page releases it here */
+  if(document.hidden&&pipeC){pipeC.width=pipeC.height=0;pipeC=null}
   if(micS){micS.getTracks().forEach(t=>t.stop());micS=null}
   chunks.length=0;
   /* The recorder of the take that is ending was left attached to the page. A
