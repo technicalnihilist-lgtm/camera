@@ -1109,6 +1109,20 @@ const IMG_DECODE_WAIT=8000,IMG_ENCODE_WAIT=12000;
 function imgWait(p,ms){let t=0;
   return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>no(new Error('image timeout')),ms)})])
     .then(v=>{clearTimeout(t);return v},e=>{clearTimeout(t);throw e})}
+/* Giving up on a decode does not stop the decode. The bound above answers the
+   burst — which falls back to the frames off the live preview — but the bitmap
+   it gave up on still arrives, a second or two later, with nothing left to use
+   it: a full-resolution still is up to 256 MB of decoded pixels (the 64 MP the
+   capture is capped at) and it lands on the low-memory phone whose slow decode
+   is the very reason the bound exists, right on top of the still surface the
+   fallback shot is being drawn into. That is the spike the comment above says
+   gets a WebView killed, and it was the only device job in the app whose late
+   arrival nothing answered: a camera stream that arrives after its bound is
+   stopped on arrival (camAsk, micStream), a frame callback that arrives after
+   its bound is ignored. Close it on arrival instead, so a decode that overran
+   leaves nothing behind. A decode that answers inside its bound is untouched —
+   the bitmap is the one the burst scores and the one it closes. */
+function dropLate(p){if(p&&p.then)p.then(b=>{try{if(b&&b.close)b.close()}catch(e){}},()=>{})}
 /* A still and its decode are two independent off-main-thread jobs, and the burst
    ran them strictly one after the other: takePhoto() for candidate i was only
    asked for once candidate i-1 had finished decoding, so a three-still burst
@@ -1135,7 +1149,13 @@ async function stillPhoto(){
     new Promise((_,no)=>{t=setTimeout(()=>no(new Error('still timeout')),STILL_WAIT)})])}
   catch(e){return null}
   finally{clearTimeout(t)}}
-function decodeStill(blob){return imgWait(createImageBitmap(blob),IMG_DECODE_WAIT).then(b=>b,()=>null)}
+/* the two decodes the burst runs — a sensor still and a preview frame — differ
+   only in their source, and both hand a bitmap to the same scorer; both answer
+   an overrun the same way (no still, and a late one closed on arrival) */
+function decodeStill(blob){let p;try{p=createImageBitmap(blob)}catch(e){return Promise.resolve(null)}
+  return imgWait(p,IMG_DECODE_WAIT).then(b=>b,()=>{dropLate(p);return null})}
+function grabFrame(){let p;try{p=createImageBitmap(v)}catch(e){return Promise.resolve(null)}
+  return imgWait(p,IMG_DECODE_WAIT).then(b=>b,()=>{dropLate(p);return null})}
 /* one scratch surface and one grey buffer, reused for every candidate frame:
    a 5-frame burst used to allocate five 320-px canvases (~3 MB of RGBA each)
    plus five Float32Arrays per shot, right while the shutter animation runs. */
@@ -1348,7 +1368,7 @@ async function snapShot(){
       if(b.width<v.videoWidth*.9&&b.height<v.videoHeight*.9){if(b.close)b.close();stillSmall=true;break}
       nat=true;consider(b)}}
   if(!best){got=0;
-    for(let i=0;i<n;i++){let b=null;try{b=await imgWait(createImageBitmap(v),IMG_DECODE_WAIT)}catch(e){}if(!b)break;consider(b);if(i<n-1)await nextFrame()}}
+    for(let i=0;i<n;i++){const b=await grabFrame();if(!b)break;consider(b);if(i<n-1)await nextFrame()}}
   let src=best||v,W=best?best.width:v.videoWidth,H=best?best.height:v.videoHeight;
   const r=cropFor(W,H);if(!r){if(best&&best.close)best.close();return toast('Camera is not ready yet')}
   let w=Math.round(r.sw),h=Math.round(r.sh);
