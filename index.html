@@ -585,13 +585,35 @@ addEventListener('pointerdown',()=>{parTouch=true;enableTilt()},{once:true,passi
 /* ---------- top buttons ---------- */
 $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.toggle('on');e.currentTarget.setAttribute('aria-pressed',app.classList.contains('grid'))};
 $('#bT').onclick=e=>{S.tm=S.tm===0?3:S.tm===3?10:0;$('#tl').textContent=S.tm?S.tm+'s':'';e.currentTarget.classList.toggle('on',!!S.tm);e.currentTarget.setAttribute('aria-pressed',!!S.tm)};
+/* The torch is the one toggle in the app whose new state was decided before its
+   own await and written after it: `next = !torchOn` was read on the tap, and
+   `torchOn` was only assigned once applyConstraints() had settled. A second tap
+   inside that round trip therefore read the state the *first* tap had already
+   replaced and asked for the same thing again — tapping the flash twice left it
+   on, and the two constraint sets could also land out of order, leaving the
+   sensor and the button disagreeing. Every other toggle here (grid, timer, 4D,
+   depth, sound, the three engine rows) flips its flag synchronously, so a tap
+   can never be read twice; this one now records the state the last tap asked
+   for and applies it, and a tap that arrives while an apply is in flight is
+   folded into that same loop instead of racing it, so the last tap always wins
+   and the sets are serialised. A single tap is untouched: one constraint set,
+   then the same class and aria-pressed on the same element, at the same moment. */
+let torchWant=false,torchBusy=false;
 $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on this camera');
-  const btn=e.currentTarget,next=!torchOn;
-  const za=zoomAdv(),t=track();
-  try{const c=t&&t.getCapabilities?t.getCapabilities():null;
-    await t.applyConstraints({advanced:[{torch:next}].concat(modeAdv(c),za?[za]:[])});
-    torchOn=next;btn.classList.toggle('on',torchOn);btn.setAttribute('aria-pressed',torchOn)}
-  catch{toast('Flash could not turn on')}};
+  const btn=e.currentTarget;
+  torchWant=torchBusy?!torchWant:!torchOn;    /* a tap during an apply flips the pending state */
+  if(torchBusy)return;
+  torchBusy=true;
+  try{
+    while(torchWant!==torchOn){
+      const want=torchWant,za=zoomAdv(),t=track();
+      if(!t)break;
+      const c=t.getCapabilities?t.getCapabilities():null;
+      await t.applyConstraints({advanced:[{torch:want}].concat(modeAdv(c),za?[za]:[])});
+      torchOn=want}
+    btn.classList.toggle('on',torchOn);btn.setAttribute('aria-pressed',torchOn)}
+  catch{toast('Flash could not turn on')}
+  finally{torchBusy=false;torchWant=torchOn}};
 
 /* ---------- modes ---------- */
 function moveInd(first){const b=$('.modes .on'),l=b.offsetLeft,w=b.offsetWidth,i=$('#ind');

@@ -1943,6 +1943,50 @@ const check = (name, ok, detail) => {
     ', after ' + (thumbNext.after === null ? 'released' : 'still set') + ', thumb now ' + thumbNext.tag);
   await p31.close();
 
+  /* The flash button was the one toggle whose new state was read before its own
+     await and written after it, so a second tap inside the constraint round trip
+     read the state the first tap had already replaced and asked for it again:
+     two taps left the torch on, and the two sets could land out of order. The
+     last tap must win, and the sets must be serialised. */
+  const p32 = await browser.newPage();
+  await p32.setViewport({ width: 400, height: 840 });
+  p32.on('pageerror', e => errors.push('pageerror(torch): ' + e.message));
+  p32.on('console', m => { if (m.type() === 'error') errors.push('console(torch): ' + m.text().slice(0, 160)); });
+  await p32.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const torch = await p32.evaluate(async () => {
+    const t = stream.getVideoTracks()[0];
+    const orig = t.applyConstraints.bind(t);
+    const calls = [];
+    t.applyConstraints = c => new Promise(res => setTimeout(() => {
+      const a = (c.advanced || []).find(x => 'torch' in x);
+      calls.push(a ? a.torch : null);
+      orig(c).then(res, res);
+    }, 250));
+    torchOK = true;
+    const btn = document.querySelector('#bF');
+    const snap = () => ({ torchOn, calls: calls.slice(),
+      on: btn.classList.contains('on'), aria: btn.getAttribute('aria-pressed') });
+    btn.click();
+    await new Promise(r => setTimeout(r, 60));
+    btn.click();                                  // second tap inside the round trip
+    await new Promise(r => setTimeout(r, 1300));
+    const dbl = snap();
+    btn.click();                                  // and one ordinary tap after it
+    await new Promise(r => setTimeout(r, 900));
+    return { dbl, single: snap() };
+  });
+  check('a second tap on the flash during its own apply decides the state',
+    torch.dbl.torchOn === false && torch.dbl.on === false && torch.dbl.aria === 'false' &&
+    torch.dbl.calls.length === 2 && torch.dbl.calls[0] === true && torch.dbl.calls[1] === false,
+    'two taps: torch ' + torch.dbl.torchOn + ', sets ' + JSON.stringify(torch.dbl.calls) +
+    ', button ' + (torch.dbl.on ? 'on' : 'off'));
+  check('a single tap on the flash still sets it, once',
+    torch.single.torchOn === true && torch.single.on === true && torch.single.aria === 'true' &&
+    torch.single.calls.length === 3 && torch.single.calls[2] === true,
+    'one tap: torch ' + torch.single.torchOn + ', sets ' + JSON.stringify(torch.single.calls));
+  await p32.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
