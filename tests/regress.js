@@ -742,6 +742,35 @@ const check = (name, ok, detail) => {
   check('turning 4D back on re-subscribes the tilt sensor',
     t3.on === true && t3.listening === true && t3.add === 2 && t3.remove === 1,
     '4D ' + t3.on + ', listening ' + t3.listening + ', adds ' + t3.add);
+  // The gyro subscription is the last device subscription in the app that
+  // outlived a hide: the camera, the AudioContext, the viewer's clip and every
+  // scratch surface are all let go when the page hides, but this one stayed up
+  // for as long as the WebView lived, sampling the rotation-vector sensor for a
+  // page that runs no frames. It must go down with the page and come back up.
+  const tHide = await p8.evaluate(async () => {
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 200));
+    const hidden = { listening: PAR.listening, add: __do.add, remove: __do.remove };
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    window.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(k => setTimeout(k, 250));
+    return { hidden, shown: { listening: PAR.listening, add: __do.add, remove: __do.remove, on: PAR.on } };
+  });
+  check('hiding the page releases the tilt sensor',
+    tHide.hidden.listening === false && tHide.hidden.remove === 2,
+    'listening ' + tHide.hidden.listening + ', removes ' + tHide.hidden.remove);
+  check('showing the page takes the tilt sensor up again',
+    tHide.shown.listening === true && tHide.shown.add === 3 && tHide.shown.on === true,
+    'listening ' + tHide.shown.listening + ', adds ' + tHide.shown.add);
+  const tAfter = await p8.evaluate(() => {
+    PAR.base = null; PAR.ax = 0; PAR.ay = 0;
+    dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 30, gamma: 10 }));
+    dispatchEvent(new DeviceOrientationEvent('deviceorientation', { alpha: 0, beta: 10, gamma: 10 }));
+    return { gyro: PAR.gyro, ay: PAR.ay };
+  });
+  check('the parallax still reads the sensor after the page comes back',
+    tAfter.gyro === true && Math.abs(tAfter.ay - 0.5) < 0.01, 'ay ' + tAfter.ay.toFixed(2));
   await p8.close();
 
   // a permission answer that is not 'denied' still subscribes (Chromium: 'prompt')

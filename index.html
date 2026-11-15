@@ -423,7 +423,7 @@ function bindSw(id,key){const b=$(id);setSw(id,E[key]);
 bindSw('#eBurst','burst');bindSw('#eSharp','sharp');bindSw('#eAF','af');
 
 /* ---------- 4D tilt parallax ---------- */
-const PAR={on:true,k:1,ax:0,ay:0,tx:0,ty:0,base:null,raf:0,pt:0,listening:false,gyro:false};
+const PAR={on:true,k:1,ax:0,ay:0,tx:0,ty:0,base:null,raf:0,pt:0,listening:false,gyro:false,denied:false};
 const PL=[['.top',18],['#zoom',13],['#modes',11],['.ctrl',9],['#stage',-7],['#toast',20],['#rb2',16]];
 let PLc=null;
 function parLayers(){if(!PLc)PLc=PL.map(([s2,d])=>[$(s2),d]);return PLc}
@@ -487,7 +487,7 @@ function onTilt(e){
 function disableTilt(){if(!PAR.listening)return;PAR.listening=false;
   try{removeEventListener('deviceorientation',onTilt)}catch(e){}}
 function enableTilt(){
-  if(PAR.listening||!PAR.on)return;
+  if(PAR.listening||!PAR.on||PAR.denied)return;
   const start=()=>{if(PAR.listening||!PAR.on)return;PAR.listening=true;addEventListener('deviceorientation',onTilt,{passive:true})};
   try{
     if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
@@ -496,10 +496,30 @@ function enableTilt(){
          attached — so requiring 'granted' meant 4D tilt never started there at
          all. Anything that is not 'denied' subscribes; if the platform really
          is holding the permission back, no events arrive and nothing is spent. */
-      DeviceOrientationEvent.requestPermission().then(r=>{if(r!=='denied')start()}).catch(()=>{});
+      DeviceOrientationEvent.requestPermission().then(r=>{if(r==='denied')PAR.denied=true;else start()}).catch(()=>{});
     }else if(typeof DeviceOrientationEvent!=='undefined'){start()}
   }catch(e){}
 }
+/* The gyro subscription followed the setting, but nothing released it when the
+   page was hidden. It is armed on the first tap and stays up until 4D is
+   switched off, so the app held the device's rotation-vector sensor — gyro,
+   accelerometer and the fusion between them — sampling at the platform's event
+   rate for as long as it sat behind the home screen. Nothing can come of those
+   events: the parallax is driven by a requestAnimationFrame loop, and a hidden
+   page runs no frames, so each one was maths whose result could never be drawn.
+   Every other device subscription in this file is already let go on hide — the
+   camera tracks (dropCam), the AudioContext (acSuspend), the clip in the viewer
+   (viewPaused), every scratch surface — and the Android wrapper never pauses its
+   WebView, so nothing else stops the sensor. Drop it on hide and take it up
+   again on return. A platform that needs a gesture to hand the sensor over
+   (Safari's requestPermission) cannot be re-armed from a visibility event, so it
+   re-arms on the next tap instead — which is exactly how it is armed at launch.
+   The subscription is the same one, on the same handler: a page that never hid
+   is untouched, and one that comes back is tilted exactly as before. */
+let tiltWas=0;
+addEventListener('visibilitychange',()=>{
+  if(document.hidden){tiltWas=PAR.listening?1:0;disableTilt()}
+  else if(tiltWas){tiltWas=0;if(PAR.on)enableTilt()}});
 addEventListener('pointermove',e=>{
   if(!PAR.on||e.pointerType==='touch'&&e.buttons===0)return;
   const r=stageBox();
@@ -580,7 +600,11 @@ $('#t4d').onclick=()=>{D.par=!D.par;applyPar();saveCfg();toast(D.par?'4D tilt on
 function applyParStrength(){const v=+$('#rP').value;PAR.k=v/60;$('#op').textContent=PAR.k.toFixed(1)+'\u00d7'}
 $('#rP').oninput=()=>{applyParStrength();parKick();saveCfg()};
 applyParStrength();syncDepth();applyDepth();applyPar();
-addEventListener('pointerdown',()=>{parTouch=true;enableTilt()},{once:true,passive:true});
+/* This arming was one-shot, which was enough while nothing could take the
+   subscription down again. It now goes down with the page, so the tap is also
+   the way back up on a platform whose sensor needs a gesture: it stays armed for
+   the session and enableTilt() answers at once when it is already listening. */
+addEventListener('pointerdown',()=>{parTouch=true;enableTilt()},{passive:true});
 
 /* ---------- top buttons ---------- */
 $('#bG').onclick=e=>{app.classList.toggle('grid');e.currentTarget.classList.toggle('on');e.currentTarget.setAttribute('aria-pressed',app.classList.contains('grid'))};
