@@ -782,7 +782,7 @@ function openTop(){const u=location.href;let w=null;
   if(w)return toast('Opened in a new tab — allow the camera there');
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(()=>toast('Link copied — paste it into a new tab')).catch(()=>toast('Open this page in a new tab'));
   else toast('Open this page in a new tab')}
-let startId=0,ic=null,photoCaps=null,startPending=0,stillSmall=false;
+let startId=0,ic=null,photoCaps=null,capsDone=false,startPending=0,stillSmall=false;
 /* HTMLMediaElement.play() returns a promise that settles only once the element
    has actually started playing, and start() awaited it with no bound — the one
    await left on the camera path that no event ever ends. A preview whose frames
@@ -837,8 +837,11 @@ async function start(){
        gate, the same message, and the clip on the thumb that any stop leaves. */
     if(t)t.onended=()=>{if(stream!==s)return;if(rec)stopRec();v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
     const c=(t&&t.getCapabilities&&t.getCapabilities())||{};torchOK=!!c.torch;torchOn=false;
-    ic=null;photoCaps=null;stillSmall=false;
-    if(t&&window.ImageCapture){try{ic=new ImageCapture(t);ic.getPhotoCapabilities().then(pc=>{if(stream===s){photoCaps=pc;report()}}).catch(()=>{})}catch(e){ic=null}}
+    ic=null;photoCaps=null;capsDone=false;stillSmall=false;
+    /* `capsDone` is the answer to a question the burst has to ask and could not:
+       has getPhotoCapabilities() come back yet? It is set whether the query
+       resolves or rejects, and only for the stream it was made for. */
+    if(t&&window.ImageCapture){try{ic=new ImageCapture(t);ic.getPhotoCapabilities().then(pc=>{if(stream===s){photoCaps=pc;capsDone=true;report()}},()=>{if(stream===s)capsDone=true}).catch(()=>{})}catch(e){ic=null}}
     $('#bF').classList.remove('on');$('#bF').setAttribute('aria-pressed','false');$('#bF').classList.toggle('off',!torchOK);
     $('#gb').textContent='Allow camera';
     applyZoom();tune(s,c)}
@@ -1381,6 +1384,30 @@ async function snapShot(){
   let best=null,bs=-1,nat=false,got=0;
   const consider=b=>{got++;const r=cropFor(b.width,b.height),sc=n>1&&r?sharpScore(b,r.sx,r.sy,r.sw,r.sh):0;
     if(!best||sc>bs){if(best&&best.close)best.close();best=b;bs=sc}else if(b.close)b.close()};
+  /* A still asked for before the sensor's photo capabilities arrived is not
+     evidence of what the sensor can do, and the burst used to read it as the
+     verdict for the whole stream. `stillPhoto()` sends the sensor's maximum
+     still size only once `photoCaps` has arrived — a HAL query that is still
+     in flight for the first moments of a new stream — so a shot taken in that
+     window asked for a still with no size at all and got whatever default the
+     device picks, which is the current stream size or smaller. The smallness
+     test below then set `stillSmall`, and from that moment `useIc` was false:
+     every later shot of that stream — after the capabilities had long since
+     arrived — was taken off the live preview at preview resolution instead of
+     off the sensor, silently, until the camera was restarted. Measured on the
+     fake device with an ImageCapture whose getPhotoCapabilities() answers only
+     when the test lets it: the preview up, one shot taken while the query was
+     still out — `stillSmall` true, `takePhoto` called twice, both with no size
+     — and the next shot, taken after the capabilities arrived, asked the sensor
+     for nothing at all. Only a still that was actually asked for at the
+     sensor's maximum size can say the sensor's stills are too small, so the
+     verdict is only drawn when the still was asked for properly, or when the
+     query has settled without any size to ask for (a device that cannot report
+     one is one where the unconstrained still really is the best available, and
+     the memo still saves it from paying for it on every shot). Nothing else
+     changes: a stream whose capabilities are known before the first shot — the
+     ordinary case — takes exactly the stills it took before. */
+  const asked=!!(photoCaps&&photoCaps.imageWidth&&photoCaps.imageHeight);
   if(useIc){
     let blob=await stillPhoto();
     for(let i=0;i<n&&blob;i++){
@@ -1389,7 +1416,7 @@ async function snapShot(){
       const b=await decodeStill(blob);
       blob=await next;
       if(!b)break;
-      if(b.width<v.videoWidth*.9&&b.height<v.videoHeight*.9){if(b.close)b.close();stillSmall=true;break}
+      if(b.width<v.videoWidth*.9&&b.height<v.videoHeight*.9){if(b.close)b.close();if(asked||capsDone)stillSmall=true;break}
       nat=true;consider(b)}}
   if(!best){got=0;
     for(let i=0;i<n;i++){const b=await grabFrame();if(!b)break;consider(b);if(i<n-1)await nextFrame()}}
