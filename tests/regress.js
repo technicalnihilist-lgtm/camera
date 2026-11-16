@@ -2121,6 +2121,80 @@ const check = (name, ok, detail) => {
     (stopTwice.recClass === false) + (stopTwice.toast ? ', toast "' + stopTwice.toast + '"' : ''));
   await p33.close();
 
+  /* A still asked for before the sensor's photo capabilities arrived is not
+     evidence of what the sensor can do. stillPhoto() sends the sensor's maximum
+     still size only once photoCaps has arrived, so the first shot after a start
+     or a flip — while getPhotoCapabilities() is still out — asks for a still
+     with no size at all and gets whatever default the device picks, which is
+     the current stream size or smaller. The burst read that one answer as the
+     verdict for the whole stream: stillSmall was set, useIc went false, and
+     every later shot of that stream was taken off the live preview at preview
+     resolution instead of off the sensor. The query here answers only when the
+     test lets it, so the race is deterministic rather than a matter of timing. */
+  const pCaps = await browser.newPage();
+  await pCaps.setViewport({ width: 400, height: 840 });
+  pCaps.on('pageerror', e => errors.push('pageerror(caps): ' + e.message));
+  await pCaps.evaluateOnNewDocument(() => {
+    const jpeg = (w, h) => new Promise(res => {
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const x = c.getContext('2d');
+      x.fillStyle = '#2b3a4a'; x.fillRect(0, 0, w, h);
+      for (let i = 0; i < 200; i++) {
+        x.fillStyle = i % 2 ? '#ffffff' : '#000000';
+        x.fillRect((i * 37) % w, (i * 53) % h, 12, 12);
+      }
+      c.toBlob(b => res(b), 'image/jpeg', .8);
+    });
+    window.__icCalls = [];
+    window.__capsGo = null;
+    class FakeIC {
+      getPhotoCapabilities() {
+        return new Promise(res => { window.__capsGo = () => res({ imageWidth: { max: 1920 }, imageHeight: { max: 1080 } }); });
+      }
+      takePhoto(o) {
+        const sized = !!(o && o.imageWidth && o.imageHeight);
+        window.__icCalls.push(sized);
+        return sized ? jpeg(1920, 1080) : jpeg(640, 480);
+      }
+    }
+    Object.defineProperty(window, 'ImageCapture', { configurable: true, value: FakeIC });
+  });
+  await pCaps.goto(URL, { waitUntil: 'load' });
+  await wait(2000);
+  // the small stream, so the preview is 1920 wide and a 640-px still is plainly small
+  await pCaps.click('#bE'); await wait(900);
+  await pCaps.click('#qseg button[data-q="std"]'); await wait(2200);
+  await pCaps.click('#edone'); await wait(1200);
+  const shotCount = async n => {
+    for (let i = 0; i < 60; i++) {
+      if (await pCaps.evaluate(n => items.length >= n, n)) return true;
+      await wait(250);
+    }
+    return false;
+  };
+  await pCaps.click('#shut');
+  const early = await shotCount(1);
+  const beforeCaps = await pCaps.evaluate(() => ({
+    small: stillSmall, calls: window.__icCalls.slice(), caps: !!photoCaps, items: items.length }));
+  check('a still taken before the photo capabilities arrived does not condemn the sensor path',
+    early && beforeCaps.small === false && beforeCaps.calls.length > 0 &&
+    beforeCaps.calls.every(c => c === false) && beforeCaps.caps === false,
+    'shot saved ' + early + ', stillSmall ' + beforeCaps.small + ', takePhoto ' +
+    JSON.stringify(beforeCaps.calls) + ' (sized), caps ' + beforeCaps.caps);
+  await pCaps.evaluate(() => window.__capsGo && window.__capsGo());
+  await wait(600);
+  const n0 = await pCaps.evaluate(() => window.__icCalls.length);
+  await pCaps.click('#shut');
+  const later = await shotCount(2);
+  const afterCaps = await pCaps.evaluate(() => ({
+    small: stillSmall, calls: window.__icCalls.slice(), caps: !!photoCaps, items: items.length }));
+  check('and the next shot, with the capabilities in, still asks the sensor for its full size',
+    later && afterCaps.caps === true && afterCaps.small === false &&
+    afterCaps.calls.slice(n0).length > 0 && afterCaps.calls.slice(n0).every(c => c === true),
+    'shot saved ' + later + ', stillSmall ' + afterCaps.small + ', takePhoto after the caps ' +
+    JSON.stringify(afterCaps.calls.slice(n0)) + ' (sized), caps ' + afterCaps.caps);
+  await pCaps.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();
