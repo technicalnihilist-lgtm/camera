@@ -2063,6 +2063,64 @@ const check = (name, ok, detail) => {
     'one tap: torch ' + torch.single.torchOn + ', sets ' + JSON.stringify(torch.single.calls));
   await p32.close();
 
+  // The stop tap was not idempotent. MediaRecorder.stop() goes inactive at once
+  // but delivers the take's data later, and `rec` is only cleared when that data
+  // arrives — so a second tap inside that window found a recorder that had
+  // already been stopped, its stop() threw, and the catch finalised the take
+  // from the chunks that existed before the flush. The mp4 muxer this build
+  // prefers hands its fragments over on the way out, so that is every byte of
+  // the take. Drive it with a recorder that delivers on stop (the mp4 shape) and
+  // tap stop twice, 60 ms apart.
+  const p33 = await browser.newPage();
+  await p33.setViewport({ width: 400, height: 840 });
+  p33.on('pageerror', e => errors.push('pageerror(stop): ' + e.message));
+  p33.on('console', m => { if (m.type() === 'error') errors.push('console(stop): ' + m.text().slice(0, 160)); });
+  await p33.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const stopTwice = await p33.evaluate(async () => {
+    const w = ms => new Promise(k => setTimeout(k, ms));
+    window.__rec = { stops: 0, flush: 0 };
+    window.MediaRecorder = class {
+      constructor(st, o) { this.stream = st; this.mimeType = 'video/webm'; this.state = 'inactive'; this._o = o; }
+      static isTypeSupported(t) { return /webm/.test(t); }
+      start() { this.state = 'recording'; }
+      stop() {
+        if (this.state !== 'recording') throw new DOMException('inactive', 'InvalidStateError');
+        this.state = 'inactive'; window.__rec.stops++;
+        setTimeout(() => {                       // the take's data, on the way out
+          window.__rec.flush++;
+          if (this.ondataavailable) this.ondataavailable({ data: new Blob([new Uint8Array(4096)], { type: 'video/webm' }) });
+          if (this.onstop) this.onstop();
+        }, 400);
+      }
+    };
+    document.querySelector('.modes button[data-m="video"]').click();
+    await w(300);
+    document.querySelector('#shut').click();
+    for (let i = 0; i < 200; i++) { await w(100); if (rec) break; }
+    const started = !!rec;
+    const n0 = items.length;
+    document.querySelector('#shut').click();     // stop
+    await w(60);
+    document.querySelector('#shut').click();     // and again, while it is being put down
+    for (let i = 0; i < 60 && items.length === n0; i++) await w(100);
+    await w(300);
+    const it = items[items.length - 1] || {};
+    return { started, added: items.length - n0, kind: it.t || '', n: it.n || 0,
+      stops: window.__rec.stops, flush: window.__rec.flush, rec: !!rec,
+      recClass: document.querySelector('#app').classList.contains('rec'),
+      toast: document.querySelector('#toast').textContent };
+  });
+  check('a second tap on stop cannot throw the take away',
+    stopTwice.started && stopTwice.added === 1 && stopTwice.kind === 'v' &&
+    stopTwice.n > 0 && stopTwice.stops === 1 && stopTwice.flush === 1 &&
+    stopTwice.rec === false && stopTwice.recClass === false,
+    'take started ' + stopTwice.started + ', ' + stopTwice.added + ' clip ' +
+    (stopTwice.kind || 'none') + ' (' + stopTwice.n + ' B), ' + stopTwice.stops +
+    ' stop() call(s), ' + stopTwice.flush + ' flush, recording state off ' +
+    (stopTwice.recClass === false) + (stopTwice.toast ? ', toast "' + stopTwice.toast + '"' : ''));
+  await p33.close();
+
   check('no console or page errors', errors.length === 0, errors.slice(0, 3).join(' | '));
 
   await browser.close();

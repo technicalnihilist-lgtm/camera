@@ -1580,7 +1580,27 @@ function makePipe(){
    keeps drawing its canvas every frame and the mic stays open — until the app
    is restarted. Finish the take from the chunks we already have, exactly once,
    whether the event arrives or a watchdog gets there first. */
-let recWatch=0;
+/* The stop tap was not idempotent, and the second tap on it threw the take
+   away. MediaRecorder.stop() moves the recorder to 'inactive' synchronously but
+   delivers the take's data later — and `rec` is only cleared when that data
+   arrives — so for the whole window in which the shutter is still in its
+   recording state a second tap reached `stopRec()` with a recorder that was
+   already stopped. stop() on an inactive recorder throws InvalidStateError, the
+   catch around it took that as a failed stop and called `finishRec()` at once:
+   the take was finalised from the chunks that existed *before* the flush that
+   was still on its way, and `cleanupRec()` then detached the handlers so the
+   flush had nowhere to go. With the webm encoder that loses the last slice; with
+   the mp4 muxer this build prefers, which hands its fragments over on the way
+   out, it loses every byte of the take. Measured on the fake device with a
+   recorder that delivers on stop (the mp4 shape): a take started, stop tapped,
+   stop tapped again 60 ms later — one `stop()` call, the flush arriving
+   afterwards to nobody, 0 items and "Nothing was recorded". A take is stopped
+   once now: `recEnding` marks the take that is already being put down, so a
+   second tap is a no-op and the watchdog that exists for a pipeline which never
+   answers still finishes the take within its bound. Nothing on screen changes —
+   the shutter leaves the recording state at exactly the moment it did on one
+   tap, because that moment is the recorder's stop event either way. */
+let recWatch=0,recEnding=false;
 /* `chunks` is emptied when the take is finalised or abandoned and reassigned
    when the next one starts, so before that the part-Blobs of the take that just
    finished stayed referenced for the rest of the session —
@@ -1589,7 +1609,7 @@ let recWatch=0;
    MediaRecorder handed us (~210 MB for a 60 s take at the Max-quality 28 Mbps
    bitrate) even after the clip has been evicted from `items` and its object URL
    revoked. Release them as soon as the take is finalised or abandoned. */
-function cleanupRec(){clearTimeout(recWatch);recWatch=0;clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
+function cleanupRec(){clearTimeout(recWatch);recWatch=0;recEnding=false;clearInterval(rtimer);rtimer=null;app.classList.remove('rec');
   if(pipe){pipe.stop();pipe=null}
   /* the surface above is left alone while a take is being prepared, so a take
      that ends — or is abandoned — on a hidden page releases it here */
@@ -1647,7 +1667,8 @@ async function finishRec(rr){if(rec!==rr)return;
   await nextPaint();
   const blob=new Blob(parts,{type:type});
   add({t:'v',u:URL.createObjectURL(blob),x:type.includes('mp4')?'mp4':'webm',p:grabbed?posterEncode():'',n:blob.size})}
-function stopRec(){const rr=rec;if(!rr)return;
+function stopRec(){const rr=rec;if(!rr||recEnding)return;
+  recEnding=true;
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},2000);
   try{rr.stop()}catch(e){finishRec(rr)}}
 /* A MediaRecorder that fails fires `error`, then `dataavailable` with the rest
@@ -1677,6 +1698,10 @@ const REC_ERR_WAIT=1200;
 function recoverRec(rr){if(rec!==rr)return;
   clearTimeout(recWatch);
   recWatch=setTimeout(()=>{recWatch=0;finishRec(rr)},REC_ERR_WAIT);
+  /* an error on a take that is already being stopped — a pipeline that fails on
+     its way out — must not issue a second stop() either, for the reason above */
+  if(recEnding)return;
+  recEnding=true;
   try{rr.stop()}catch(e){finishRec(rr)}}
 
 /* The take's microphone request is the one await in the recording path with no
