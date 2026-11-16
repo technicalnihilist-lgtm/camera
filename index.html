@@ -1055,9 +1055,26 @@ function stageBox(){if(!stageRectCache){const a=app.getBoundingClientRect(),st=$
   stageRectCache={left:a.left+st.offsetLeft,top:a.top+st.offsetTop,width:st.offsetWidth,height:st.offsetHeight}}return stageRectCache}
 function viewAspect(){const r=stageBox();let a=r.width/r.height;
   if(!a||!isFinite(a))a=9/16;if(S.mode==='square')a=1;return a}
+/* cropFor() takes the aspect it should crop to, because the one caller that
+   must not follow the viewport is the recording. A take's crop is measured
+   once, when the pipe is built, and drawn into a canvas sized from it — and a
+   canvas attached to captureStream() cannot be resized under the take without
+   disturbing the stream. `draw()` re-measured the crop every frame, through
+   viewAspect(), which is the live stage's aspect: when the viewport changed
+   mid-take — a rotation, a split-screen resize, a foldable unfolded, a desktop
+   window dragged — the crop switched to the new aspect while the surface it is
+   painted into kept the old one, so every later frame of the clip was squashed
+   into a shape it was not cropped for. Measured here on the fake 4K device
+   (400 × 840 stage, 1028 × 2160 pipe): resizing the viewport to 400 × 520 in
+   the middle of a take left the pipe at 1028 × 2160 (0.476) while the crop
+   became 1662 × 2160 (0.769) — the rest of the clip horizontally compressed by
+   1.6×. The take now crops to the aspect it started with, so the framing is
+   fixed for the whole clip, exactly as the pipe's size already was; a shot
+   taken afterwards is untouched, because a photo re-measures the preview it
+   was framed in. */
 function cropRect(){return cropFor(v.videoWidth,v.videoHeight)}
-function cropFor(W,H){if(!W||!H)return null;
-  const a=viewAspect();let sw,sh;
+function cropFor(W,H,a0){if(!W||!H)return null;
+  const a=a0>0?a0:viewAspect();let sw,sh;
   if(W/H>a){sh=H;sw=H*a}else{sw=W;sh=W/a}
   sw/=S.dz;sh/=S.dz;
   return{sx:(W-sw)/2,sy:(H-sh)/2,sw,sh,W,H}}
@@ -1580,6 +1597,8 @@ function pipeCanvas(w,h){
 addEventListener('visibilitychange',()=>{if(document.hidden&&pipeC&&!rec&&!pipe){pipeC.width=pipeC.height=0;pipeC=null}});
 function makePipe(){
   const r=cropRect();if(!r)return null;
+  /* the take keeps the framing it was started in (see cropFor()) */
+  const a0=r.sw/r.sh;
   const scale=Math.min(1,QP[E.q].vmax/Math.max(r.sw,r.sh));
   const w=Math.max(2,Math.round(r.sw*scale)&~1),h=Math.max(2,Math.round(r.sh*scale)&~1);
   const c=pipeCanvas(w,h);if(!c)return null;
@@ -1607,7 +1626,7 @@ function makePipe(){
     if(offC.width!==W||offC.height!==H){offC.width=W;offC.height=H;offX=null}
     if(!offX){try{offX=offC.getContext('2d',{alpha:false})}catch(e){offX=null}}
     return offX?offC:null};
-  const draw=()=>{const q=cropRect();if(!q)return;
+  const draw=()=>{const q=cropFor(v.videoWidth,v.videoHeight,a0);if(!q)return;
     if(D.depth){const o=off(w,h);
       if(o){drawCrop(offX,o,q,w,h,S.face==='user');try{depthPass(offX,o,D.k)}catch(e){}
         ctx.drawImage(o,0,0);return}}

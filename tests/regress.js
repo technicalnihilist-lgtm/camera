@@ -294,6 +294,43 @@ const check = (name, ok, detail) => {
     (recErr.d ? recErr.d.toFixed(1) + 's' : 'no duration') +
     ', recording state off ' + (recErr.recClass === false));
 
+  // A take's crop is measured once, when the recording pipe is built, and drawn
+  // into a canvas sized from it — a canvas attached to captureStream() cannot be
+  // resized under the take. `draw()` re-measured the crop every frame through
+  // viewAspect(), the *live* stage's aspect, so a viewport change in the middle
+  // of a take (rotation, split screen, a foldable, a dragged window) switched the
+  // crop to the new aspect while the surface kept the old one and squashed every
+  // later frame of the clip. The crop must stay the one the pipe was built for.
+  await page.click('#modes button[data-m="video"]'); await wait(600);
+  await page.evaluate(() => {
+    window.__crops = [];
+    const real = window.drawCrop;
+    window.__realDrawCrop = real;
+    window.drawCrop = function (ctx, c, r, w, h, m) {
+      window.__crops.push({ sa: r.sw / r.sh, da: w / h });
+      if (window.__crops.length > 40) window.__crops.shift();
+      return real.apply(this, arguments);
+    };
+  });
+  await page.click('#shut'); await wait(1400);
+  const cropBefore = await page.evaluate(() => window.__crops.slice(-6));
+  await page.setViewport({ width: 400, height: 520 });   // the viewport changes mid-take
+  await wait(900);
+  const cropAfter = await page.evaluate(() => window.__crops.slice(-6));
+  await page.setViewport({ width: 400, height: 840 });
+  await wait(400);
+  const squash = cropAfter.length ? cropAfter.map(f => Math.abs(f.sa - f.da) / f.da) : [1];
+  check('a viewport change mid-take cannot squash the recording',
+    cropBefore.length > 0 && cropAfter.length > 0 &&
+    Math.max.apply(null, squash) < 0.02 &&
+    cropAfter.every(f => Math.abs(f.sa - cropBefore[cropBefore.length - 1].sa) < 0.02),
+    'crop/pipe aspect before ' + (cropBefore.length ? cropBefore[cropBefore.length - 1].sa.toFixed(3) : '?') +
+    ', after the resize ' + (cropAfter.length ? cropAfter[cropAfter.length - 1].sa.toFixed(3) : '?') +
+    ' into ' + (cropAfter.length ? cropAfter[cropAfter.length - 1].da.toFixed(3) : '?') +
+    ', worst mismatch ' + (Math.max.apply(null, squash) * 100).toFixed(1) + '%');
+  await page.evaluate(() => { if (window.__realDrawCrop) window.drawCrop = window.__realDrawCrop; if (rec) stopRec(); });
+  await wait(2000);
+
   // native save through the Android bridge (only wired when window.AndroidCam exists)
   const p2 = await browser.newPage();
   await p2.setViewport({ width: 400, height: 840 });
