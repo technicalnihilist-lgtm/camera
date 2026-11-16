@@ -834,8 +834,31 @@ async function start(){
        exactly as a capture does — the reason the hide handler leaves it alone.
        End it the way the stop tap does, so the clip up to that moment is kept
        and `rec` is clear for the retry. Nothing on screen changes: the same
-       gate, the same message, and the clip on the thumb that any stop leaves. */
-    if(t)t.onended=()=>{if(stream!==s)return;if(rec)stopRec();v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
+       gate, the same message, and the clip on the thumb that any stop leaves.
+       What the handler left behind was the stream: `stream` still held the
+       MediaStream whose only track had just ended, so every "is the camera
+       live?" test in the app answered yes for a camera that was gone. The
+       gate's own "Use phone camera app" hides the gate and opens the picker,
+       and dismissing that picker asks `restoreGate()` to put the gate back —
+       but it only does so `if(lastGate&&!stream)`, and a dead stream is still
+       a truthy one. Measured on the fake device with a track that dispatches
+       `ended`: the gate came up, "Use phone camera app" took it down, the
+       picker's `cancel` fired, and the gate did not come back — `stream` true,
+       `v.videoWidth` 3840, an empty stage at opacity 0 and no message, with
+       the shutter opening the file picker (native mode, chosen while there was
+       still a camera) instead of taking a photo or saying why it could not.
+       The retry button, the only way back to the camera from that screen, was
+       gone for the rest of the session. Release what is left of the stream
+       here, exactly as `start()` and `dropCam()` release one: no stream, no
+       torch (the sensor's went out with the track, so the flash button stops
+       claiming it is on), no dead `srcObject` held by the video element. The
+       retry then reconnects as it always did, the picker path is the native
+       mode it was chosen for, and a shutter tap on a page with no camera says
+       "Camera is not ready yet" instead of silently doing nothing. */
+    if(t)t.onended=()=>{if(stream!==s)return;if(rec)stopRec();
+      stream=null;torchOn=false;$('#bF').classList.remove('on');$('#bF').setAttribute('aria-pressed','false');
+      try{v.srcObject=null}catch(e){}
+      v.style.opacity=0;gate('The camera stopped. Tap below to reconnect.')};
     const c=(t&&t.getCapabilities&&t.getCapabilities())||{};torchOK=!!c.torch;torchOn=false;
     ic=null;photoCaps=null;capsDone=false;stillSmall=false;
     /* `capsDone` is the answer to a question the burst has to ask and could not:
