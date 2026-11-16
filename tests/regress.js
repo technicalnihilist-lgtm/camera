@@ -1307,6 +1307,46 @@ const check = (name, ok, detail) => {
     'refused in ' + deniedMic.ms + ' ms, ' + deniedMic.asks + ' request(s), take started ' + deniedMic.started);
   await p17.close();
 
+  // The permission state was consulted in front of the microphone request:
+  // micStream() awaited navigator.permissions.query() and only then asked for
+  // the microphone, so every take waited for a query that only decides whether
+  // to ask at all and how long a pending request may take — 4.07 s measured on
+  // the first take after a capture, all of it between the shutter tap and the
+  // recording state — and a query that never answered hung the take for good.
+  // It must be consulted without holding the request up.
+  const p17b = await browser.newPage();
+  await p17b.setViewport({ width: 400, height: 840 });
+  await p17b.evaluateOnNewDocument(() => {
+    window.__micAsked = 0;
+    const orig = MediaDevices.prototype.getUserMedia;
+    MediaDevices.prototype.getUserMedia = function (c) {
+      if (c && c.audio && !c.video) window.__micAsked++;
+      return orig.call(this, c);
+    };
+    // a permission query that answers 'granted' four seconds late
+    navigator.permissions.query = () => new Promise(r => setTimeout(() => r({ state: 'granted' }), 4000));
+  });
+  await p17b.goto(URL, { waitUntil: 'load' });
+  await wait(2500);
+  const slowState = await p17b.evaluate(async () => {
+    const t0 = performance.now(); let ok = false;
+    try { const s = await micStream(); ok = !!s; s.getTracks().forEach(t => t.stop()); } catch (e) {}
+    const ms = Math.round(performance.now() - t0);
+    navigator.permissions.query = () => new Promise(() => {});   // and one that never answers
+    const t1 = performance.now(); let ok2 = false, out = 'hung';
+    const p = micStream().then(s => { ok2 = !!s; s.getTracks().forEach(t => t.stop()); out = 'answered'; },
+      () => { out = 'rejected'; });
+    await Promise.race([p, new Promise(r => setTimeout(r, 8000))]);
+    return { ms, ok, asked: window.__micAsked, out, ok2, ms2: Math.round(performance.now() - t1) };
+  });
+  check('a slow permission query does not hold the take up',
+    slowState.ok && slowState.asked >= 1 && slowState.ms < 3500,
+    'microphone in ' + slowState.ms + ' ms, ' + slowState.asked + ' request(s)');
+  check('a permission query that never answers cannot hang the take',
+    slowState.out === 'answered' && slowState.ok2 === true && slowState.ms2 < 3000,
+    slowState.out + ' in ' + slowState.ms2 + ' ms');
+  await p17b.close();
+
   // The three image decode/encode waits on the capture path (the still's JPEG
   // decode, each preview frame's grab, the shot's JPEG encode) used to be the
   // only awaits between a shutter tap and a saved photo that no event ever

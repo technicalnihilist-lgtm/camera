@@ -1756,8 +1756,33 @@ function micState(){try{
     if(q&&q.then)return q.then(s=>(s&&s.state)||'',()=>'');
   }catch(e){}
   return Promise.resolve('')}
+/* The permission state decides two things: whether the microphone is worth
+   asking for at all (a refused one is answered without a prompt, and the take
+   records without sound) and how long a pending request may take (5 s for a
+   granted device, 20 s for a prompt on screen). Both are decided by a query,
+   and that query was awaited in front of everything else, so the take waited
+   for it before the microphone was even asked for. It is not free: 4.07 s
+   measured here for the first take after a capture, on top of the 1.49 s the
+   microphone itself took, and the whole of it landed between the shutter tap
+   and the recording state with the shutter dead — the take that used to start
+   at 5.6 s starts at 1.75 s now. A query that never settles was worse than
+   slow: it was awaited before anything had been asked for, so the take hung for
+   good, which is the lock every other wait on this path was bounded for. It is
+   consulted within a bound instead — a permissions query is answered from the
+   browser's cache in well under a millisecond, so 250 ms is only ever reached
+   by a query that is not going to answer in time — and an answer that does not
+   arrive inside it is treated as "no state to go on", which is the answer the
+   app already gives on a browser without the API: the microphone is asked for
+   and the request gets the 20 s bound. Nothing else changes: a refused
+   microphone is still answered without asking for it, a granted one that has
+   not opened in 5 s is still given up on with its late stream stopped on
+   arrival, and an unanswered prompt still gets its 20 s. */
+const MIC_QUERY_WAIT=250;
+const within=(p,ms)=>{let t=0;
+  return Promise.race([p,new Promise(r=>{t=setTimeout(()=>r(''),ms)})])
+    .then(v=>{clearTimeout(t);return v},e=>{clearTimeout(t);throw e})};
 async function micStream(){
-  const st=await micState();
+  const st=await within(micState(),MIC_QUERY_WAIT);
   if(st==='denied')throw Object.assign(new Error('microphone denied'),{name:'NotAllowedError'});
   const p=gum({audio:true});let t=0;
   return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>{p.then(stopTracks,()=>{});no(new Error('mic timeout'))},st==='granted'?MIC_WAIT:MIC_ASK_WAIT)})])
