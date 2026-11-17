@@ -2022,10 +2022,24 @@ if(window.AndroidCam){
          for minutes; a message task is not throttled. yieldTask() hands the
          thread back the same way — a macrotask, so frames still paint between
          slices — without the clamp. */
+      /* The slice read is the last await in the save with no bound. The two
+         reads above it are bounded, but each slice's `readAsDataURL` was awaited
+         bare, and `saving` is released only by the `finally` after the whole
+         save: a reader the WebView never services — the same memory-pressured
+         state that leaves a fetch pending, and it has to build a base64 string
+         four thirds the length of the slice on that same heap — leaves the
+         promise pending for good. Then the Save button is dead for the rest of
+         the session (every later tap returns on the guard and says nothing) and
+         the bridge job stays open with its temp file. Bound it with the same
+         8 s the two reads above get: a read that overruns takes the failure path
+         the handler already has — `abort(id)` releases the job, one "Could not
+         save this item" toast, and the `finally` frees the button. A 512 KB
+         slice reads in a millisecond or two, so a save that completes never
+         reaches the bound. */
       const CH=512*1024;let off=0;
       while(off<bl.size){
         const slice=bl.slice(off,Math.min(off+CH,bl.size));
-        const b64=await new Promise((ok,no)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',')[1]||'');fr.onerror=no;fr.readAsDataURL(slice)});
+        const b64=await imgWait(new Promise((ok,no)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',')[1]||'');fr.onerror=no;fr.readAsDataURL(slice)}),SAVE_WAIT);
         if(window.AndroidCam.write(id,b64)!=='ok')throw new Error('write');
         off+=CH;
         if(off<bl.size)await yieldTask();

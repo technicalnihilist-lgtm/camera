@@ -469,6 +469,46 @@ const check = (name, ok, detail) => {
     wedgedSave.opensWhileWedged + ' session(s) opened while wedged, then a second tap wrote ' +
     wedgedSave.retried + ' bytes ("' + wedgedSave.last + '")');
 
+  // The slice read was the last await in the save with no bound: each 512 KB
+  // slice went through FileReader.readAsDataURL awaited bare, so a reader the
+  // WebView never services kept `saving` set for the rest of the session — the
+  // Save button dead, and the bridge job left open with its temp file. It must
+  // give up inside its bound, release the job, and leave the button working.
+  const wedgedRead = await p2.evaluate(async () => {
+    const b = new Uint8Array(4096);
+    items.push({ t: 'v', u: URL.createObjectURL(new Blob([b], { type: 'video/webm' })), x: 'webm', p: '' });
+    vi = items.length - 1;
+    const real = FileReader.prototype.readAsDataURL;
+    FileReader.prototype.readAsDataURL = function () { /* a read that never settles */ };
+    const before = { opens: window.__br.opens, bytes: window.__br.bytes, aborted: window.__br.aborted };
+    document.querySelector('#vs').click();
+    const t0 = performance.now();
+    let toast = '';
+    while (performance.now() - t0 < 13000) {
+      await new Promise(r => setTimeout(r, 100));
+      toast = document.querySelector('#toast').textContent;
+      if (/Could not save/.test(toast)) break;
+    }
+    const gaveUp = Math.round(performance.now() - t0);
+    const opensWhileWedged = window.__br.opens - before.opens;
+    const aborted = window.__br.aborted - before.aborted;
+    FileReader.prototype.readAsDataURL = real;      // and the button must still work
+    document.querySelector('#vs').click();
+    const t1 = performance.now();
+    while (performance.now() - t1 < 8000) {
+      await new Promise(r => setTimeout(r, 50));
+      if (window.__br.bytes >= before.bytes + 4096) break;
+    }
+    return { toast, gaveUp, opensWhileWedged, aborted, retried: window.__br.bytes - before.bytes,
+      last: document.querySelector('#toast').textContent };
+  });
+  check('a save whose slice read never settles cannot leave the Save button dead',
+    wedgedRead.gaveUp < 13000 && /Could not save/.test(wedgedRead.toast) &&
+    wedgedRead.aborted === 1 && wedgedRead.retried >= 4096,
+    'gave up after ' + wedgedRead.gaveUp + ' ms ("' + wedgedRead.toast + '"), job ' +
+    (wedgedRead.aborted ? 'aborted' : 'left open') + ', then a second tap wrote ' +
+    wedgedRead.retried + ' bytes ("' + wedgedRead.last + '")');
+
   // timer: a cancel must stop the countdown at once, and never capture
   const p3 = await browser.newPage();
   await p3.setViewport({ width: 400, height: 840 });
