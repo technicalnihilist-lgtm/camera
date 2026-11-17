@@ -430,6 +430,45 @@ const check = (name, ok, detail) => {
     dbl.opens === 1 && dbl.wrote === dbl.n,
     dbl.opens + ' session(s), ' + dbl.wrote + ' of ' + dbl.n + ' bytes');
 
+  // The save's `fetch` of the clip was the one await in the app with no bound, and
+  // `saving` is only released when the save finishes: a fetch a memory-pressured
+  // WebView leaves pending kept the flag set for the rest of the session, so the
+  // Save button was dead — every later tap returned on the guard and said nothing.
+  // The button must give up inside its bound and then work again.
+  const wedgedSave = await p2.evaluate(async () => {
+    const b = new Uint8Array(4096);
+    items.push({ t: 'v', u: URL.createObjectURL(new Blob([b], { type: 'video/webm' })), x: 'webm', p: '' });
+    vi = items.length - 1;
+    const real = window.fetch;
+    window.fetch = () => new Promise(() => {});     // a fetch that never settles
+    const before = { opens: window.__br.opens, bytes: window.__br.bytes };
+    document.querySelector('#vs').click();
+    const t0 = performance.now();
+    let toast = '';
+    while (performance.now() - t0 < 13000) {
+      await new Promise(r => setTimeout(r, 100));
+      toast = document.querySelector('#toast').textContent;
+      if (/Could not save/.test(toast)) break;
+    }
+    const gaveUp = Math.round(performance.now() - t0);
+    const opensWhileWedged = window.__br.opens - before.opens;
+    window.fetch = real;                            // and the button must still work
+    document.querySelector('#vs').click();
+    const t1 = performance.now();
+    while (performance.now() - t1 < 8000) {
+      await new Promise(r => setTimeout(r, 50));
+      if (window.__br.bytes >= before.bytes + 4096) break;
+    }
+    return { toast, gaveUp, opensWhileWedged, retried: window.__br.bytes - before.bytes,
+      last: document.querySelector('#toast').textContent };
+  });
+  check('a save whose fetch never settles cannot leave the Save button dead',
+    wedgedSave.gaveUp < 13000 && /Could not save/.test(wedgedSave.toast) &&
+    wedgedSave.opensWhileWedged === 0 && wedgedSave.retried >= 4096,
+    'gave up after ' + wedgedSave.gaveUp + ' ms ("' + wedgedSave.toast + '"), ' +
+    wedgedSave.opensWhileWedged + ' session(s) opened while wedged, then a second tap wrote ' +
+    wedgedSave.retried + ' bytes ("' + wedgedSave.last + '")');
+
   // timer: a cancel must stop the countdown at once, and never capture
   const p3 = await browser.newPage();
   await p3.setViewport({ width: 400, height: 840 });

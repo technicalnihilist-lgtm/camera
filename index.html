@@ -1967,6 +1967,30 @@ if(window.AndroidCam){
      "Saved to your Gallery" toasts fired. The handler is now guarded: while a
      save is in flight further taps are ignored, and the flag is released in a
      `finally` so a failed or aborted save never leaves the button dead. */
+  /* The guard above answers a save that never finishes — and the save has one
+     await that can never finish. `fetch(it.u)` reads the clip back out of the
+     blob store the capture list keeps it in, and it is the only await in this
+     file with no bound: every other one that can hang — the camera request, the
+     preview's play(), takePhoto, the burst's frame wait, the microphone and its
+     permission query, the still's decode, each frame's grab, the shot's encode,
+     the wait for a painted frame before a stopped take is built — was given one
+     for exactly this reason. A fetch of a 210 MB Max-quality take (60 s at
+     28 Mbps) is a read of that whole blob on a phone that is already holding the
+     clip, the poster and the live preview, so it is the one request in the app
+     that a memory-pressured WebView can leave pending: the promise never settles,
+     `saving` is never released, and the Save button is dead for the rest of the
+     session — every later tap returns on the guard and says nothing, which is the
+     stuck-until-restart state the guard itself was added to prevent. Measured
+     here with a fetch stubbed to never settle: one tap, then a second tap 9.5 s
+     later with the fetch working again opened no bridge session, wrote no bytes
+     and put no message on screen. Bound both
+     reads the way the rest of the file is bounded: a local blob that has not
+     answered in 8 s (the same bound the camera request gets, and many times what
+     a memory-backed read costs) is given up on, the save takes the failure path
+     the handler already has — one "Could not save this item" toast — and the flag
+     is released by the same `finally`, so the next tap is a fresh save. Nothing
+     on screen changes: a save that completes never reaches the bound. */
+  const SAVE_WAIT=8000;
   let saving=false;
   $('#vs').addEventListener('click',async e=>{
     const it=items[vi];e.preventDefault();
@@ -1974,7 +1998,8 @@ if(window.AndroidCam){
     saving=true;
     let id=0;
     try{
-      const res=await fetch(it.u);const bl=await res.blob();
+      const res=await imgWait(fetch(it.u),SAVE_WAIT);
+      const bl=await imgWait(res.blob(),SAVE_WAIT);
       const mime=bl.type||(it.t==='v'?'video/mp4':'image/jpeg');
       const name='camera-'+new Date().toISOString().replace(/[:.]/g,'-')+'.'+it.x;
       id=window.AndroidCam.open(mime,name);
