@@ -1010,6 +1010,26 @@ function report(){const t=track();if(!t||!t.getSettings)return;const st=t.getSet
   const rows=['Preview stream: '+(st.width||'?')+' × '+(st.height||'?')+(st.frameRate?' @ '+Math.round(st.frameRate)+' fps':'')];
   rows.push(pc&&pc.imageWidth&&pc.imageHeight?'Photo sensor: up to '+pc.imageWidth.max+' × '+pc.imageHeight.max+' ('+mp(pc.imageWidth.max*pc.imageHeight.max)+')':'Photo: best frames from the live stream');
   $('#info').innerHTML=rows.join('<br>')}
+/* Tap-to-focus asks for single-shot focus and puts continuous focus back 3 s
+   later, and it scheduled that restore only once its own `applyConstraints()`
+   had settled — the last unbounded await left that gates a write, after the
+   camera request, the microphone, the zoom readback, the preview's play() and
+   the torch set were all bounded. A rejected set is harmless, since continuous
+   focus was never replaced and the camera keeps hunting; the set that never
+   answers is the one that sticks: the restore is never scheduled, so the
+   sensor stays on the single shot that tap asked for and every later photo is
+   taken at whatever distance it happened to land on, with nothing said and
+   nothing on screen to retry from. Measured here on a track that advertises
+   single-shot and an applyConstraints that never settles: 8 s after the tap,
+   the tap's set is still the only one sent, the camera is on single-shot
+   focus, and no restore is pending. A camera going away under the tap is
+   exactly when a round trip wedges. Bound the set at 2 s (a working one is a
+   mode change of a few tens of milliseconds, so nothing that works reaches
+   it); a set that answers or is rejected behaves exactly as before, and a set
+   that runs out is treated as the tap it was — the restore is scheduled anyway,
+   since restoring continuous focus over a camera that is already continuous is
+   a no-op, and the restore's own set is fire-and-forget and holds no guard. */
+const FOCUS_WAIT=2000;
 let afT=0;
 async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
   const c=(t.getCapabilities&&t.getCapabilities())||{},sr=stageBox();
@@ -1019,7 +1039,8 @@ async function focusAt(e){const t=track(),r=cropRect();if(!t||!r)return;
   if(c.focusMode&&c.focusMode.includes&&c.focusMode.includes('single-shot'))adv.focusMode='single-shot';
   if(!Object.keys(adv).length)return;
   const za=zoomAdv();
-  try{await t.applyConstraints({advanced:[adv].concat(modeAdv(c,true),za?[za]:[])})}catch(err){return}
+  try{await imgWait(t.applyConstraints({advanced:[adv].concat(modeAdv(c,true),za?[za]:[])}),FOCUS_WAIT)}
+  catch(err){if(!err||err.message!=='image timeout')return}   /* rejected: continuous focus is still in place */
   clearTimeout(afT);afT=setTimeout(()=>{if(track()!==t||!c.focusMode||!c.focusMode.includes('continuous'))return;
     const z2=zoomAdv();t.applyConstraints({advanced:[{focusMode:'continuous'}].concat(modeAdv(c,true),z2?[z2]:[])}).catch(()=>{})},3000)}
 function gate(m,label,action){gbAction=action||'retry';lastGate={m,label:label||'Allow camera',action:gbAction};
