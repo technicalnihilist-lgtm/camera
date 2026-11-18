@@ -767,13 +767,36 @@ function hasGum(){return !!((navigator.mediaDevices&&navigator.mediaDevices.getU
    never leave the sensor open, and the timeout takes the failure path the app
    already has — the gate, with its retry button, instead of a black preview. */
 const CAM_WAIT=8000,CAM_ASK_WAIT=20000;
+/* The camera's permission *state* was consulted the same way the microphone's
+   is, and with the same missing bound — and here it was worse than slow. The
+   state only decides which bound a pending getUserMedia() request gets (8 s for
+   a granted camera, 20 s for a prompt on screen), so the query is not worth
+   anything in itself, but it was awaited before `ask()` was ever called: a
+   `permissions.query()` that never settles — the API is a stub in a WebView
+   whose permission plumbing is not wired up, or a browser wedged under memory
+   pressure — meant the camera was never asked for at all. Nothing failed, so
+   the gate never came up and no message was ever shown; the page sat on a black
+   preview with `startPending` set, and no retry exists for a start that has not
+   failed: the shutter only ever answered "Camera is not ready yet" until the app
+   was restarted. Measured with `navigator.permissions.query` stubbed to never
+   settle, on a working camera: 12 s in, 0 getUserMedia calls, `videoWidth` 0,
+   the gate still down and the stage empty. The microphone's query was given a
+   250 ms bound for exactly this reason (see micStream()); consult this one the
+   same way, through the same helper. A query is answered from the browser's
+   cache in well under a millisecond, so 250 ms is only ever reached by one that
+   is not going to answer, and an answer that does not arrive is treated as "no
+   state to go on" — the answer the app already gives on a browser without the
+   API: the camera is asked for and the request gets the 20 s prompt bound. A
+   camera that starts is untouched: the query answers first, and the request it
+   leads to is the same request with the same bound it had before. */
+const CAM_QUERY_WAIT=250;
 function camState(){try{
     const q=navigator.permissions&&navigator.permissions.query({name:'camera'});
     if(q&&q.then)return q.then(s=>(s&&s.state)||'',()=>'');
   }catch(e){}
   return Promise.resolve('')}
 async function camAsk(ask){
-  const st=await camState();
+  const st=await within(camState(),CAM_QUERY_WAIT);
   const p=ask();let t=0;
   return Promise.race([p,new Promise((_,no)=>{t=setTimeout(()=>{p.then(stopTracks,()=>{});no(Object.assign(new Error('camera timeout'),{name:'TimeoutError'}))},st==='granted'?CAM_WAIT:CAM_ASK_WAIT)})])
     .then(s=>{clearTimeout(t);return s},e=>{clearTimeout(t);throw e})}
