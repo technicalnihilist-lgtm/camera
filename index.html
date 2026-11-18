@@ -623,6 +623,26 @@ $('#bT').onclick=e=>{S.tm=S.tm===0?3:S.tm===3?10:0;$('#tl').textContent=S.tm?S.t
    and the sets are serialised. A single tap is untouched: one constraint set,
    then the same class and aria-pressed on the same element, at the same moment. */
 let torchWant=false,torchBusy=false;
+/* The torch set is the last await in the app with no bound, and the only one
+   left that holds a guard. `torchBusy` is released only once the apply has
+   settled, and a tap that lands while it is set folds its wish into
+   `torchWant` and returns — so a camera whose torch set never answers left the
+   button dead for the rest of the session: every later tap returned on the
+   guard, the pending state flipped silently with nothing applied and nothing
+   said, and `torchOn` stayed where it was. Measured here on a track that
+   advertises torch and an applyConstraints that never settles: 2 s after the
+   tap, `torchBusy` true, `torchOn` false, no message on screen; a second tap
+   2 s later with the camera answering again sent no constraint set at all (one
+   in total, the hung one) and still said nothing. A camera going away under
+   the toggle is exactly when this happens — the same wedged round trip the
+   camera request, the microphone, the zoom readback and the preview's play()
+   are bounded for. Bound it: a torch set that has not answered in 4 s (a
+   working one is a mode change of a few tens of milliseconds, so nothing that
+   works reaches it) takes the failure path this handler already has — one
+   "Flash could not turn on" toast — and the `finally` below releases the
+   guard, so the next tap is a fresh attempt. Nothing changes for a camera that
+   answers: one set, the same class and aria-pressed, at the same moment. */
+const TORCH_WAIT=4000;
 $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on this camera');
   const btn=e.currentTarget;
   torchWant=torchBusy?!torchWant:!torchOn;    /* a tap during an apply flips the pending state */
@@ -633,7 +653,7 @@ $('#bF').onclick=async e=>{if(!torchOK)return toast('Flash is not available on t
       const want=torchWant,za=zoomAdv(),t=track();
       if(!t)break;
       const c=t.getCapabilities?t.getCapabilities():null;
-      await t.applyConstraints({advanced:[{torch:want}].concat(modeAdv(c),za?[za]:[])});
+      await imgWait(t.applyConstraints({advanced:[{torch:want}].concat(modeAdv(c),za?[za]:[])}),TORCH_WAIT);
       torchOn=want}
     btn.classList.toggle('on',torchOn);btn.setAttribute('aria-pressed',torchOn)}
   catch{toast('Flash could not turn on')}
