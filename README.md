@@ -2,11 +2,11 @@
 
 <img src="assets/icon.png" width="96" height="96" alt="Liquid Glass Camera icon">
 
-<img src="assets/banner.svg" alt="Liquid Glass Camera — a liquid-glass camera app (photo, video, square, best-shot burst, detail…">
+<img src="assets/banner.svg" alt="Liquid Glass Camera">
 
 <a href="https://github.com/technicalnihilist-lgtm/camera/stargazers"><img src="https://img.shields.io/badge/stars-0-5A31F4?style=for-the-badge&logo=github&logoColor=white" alt="stars: 0"></a>&nbsp;<a href="https://github.com/technicalnihilist-lgtm/camera/network/members"><img src="https://img.shields.io/badge/forks-0-3FB950?style=for-the-badge" alt="forks: 0"></a>
 
-<a href="https://github.com/technicalnihilist-lgtm/camera/releases/latest"><img src="https://img.shields.io/badge/DOWNLOAD-APK-6D5AE6?style=for-the-badge&logo=android&logoColor=white" alt="Download APK"></a>
+<a href="https://github.com/technicalnihilist-lgtm/camera/releases/latest/download/liquid-glass-camera-1.19.apk"><img src="https://img.shields.io/badge/DOWNLOAD-APK-6D5AE6?style=for-the-badge&logo=android&logoColor=white" alt="Download APK"></a> <a href="https://technicalnihilist-lgtm.github.io/apps-site/apps/camera.html"><img src="https://img.shields.io/badge/WEBSITE-OPEN-3B82F6?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Website"></a>
 
 <b>Support the work</b>
 
